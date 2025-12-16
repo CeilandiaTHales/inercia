@@ -14,13 +14,13 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // --- SECURITY & MIDDLEWARE ---
-app.use(helmet() as express.RequestHandler); // Adds security headers (HSTS, X-Frame-Options, etc.)
+app.use(helmet() as any); // Adds security headers (HSTS, X-Frame-Options, etc.)
 app.use(cors({
   origin: process.env.FRONTEND_URL || '*', // Restrict this in production
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
-app.use(express.json());
+app.use(express.json() as any);
 app.use(passport.initialize());
 
 // --- TYPES ---

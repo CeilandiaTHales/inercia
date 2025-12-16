@@ -23,7 +23,8 @@
     "dotenv": "^17.2.3",
     "passport-google-oauth20": "^2.0.0",
     "passport": "^0.7.0",
-    "helmet": "^8.1.0"
+    "helmet": "^8.1.0",
+    "bullmq": "^5.66.0"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
