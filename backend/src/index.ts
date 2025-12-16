@@ -6,13 +6,20 @@ import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
 import pool from './db';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import helmet from 'helmet';
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(cors());
+// --- SECURITY & MIDDLEWARE ---
+app.use(helmet() as express.RequestHandler); // Adds security headers (HSTS, X-Frame-Options, etc.)
+app.use(cors({
+  origin: process.env.FRONTEND_URL || '*', // Restrict this in production
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 app.use(express.json());
 app.use(passport.initialize());
 
@@ -48,6 +55,7 @@ if (process.env.GOOGLE_CLIENT_ID) {
       }
       return done(null, user);
     } catch (err: any) {
+      console.error("OAuth Error:", err);
       return done(err);
     }
   }));
@@ -81,6 +89,8 @@ const requireAdmin = (req: any, res: any, next: any) => {
 // Auth Routes
 app.post('/api/auth/register', async (req, res) => {
   const { email, password } = req.body;
+  if (!email || !password) return res.status(400).json({ error: "Email and password required" });
+  
   try {
     const hash = await bcrypt.hash(password, 10);
     const result = await pool.query(
@@ -89,7 +99,8 @@ app.post('/api/auth/register', async (req, res) => {
     );
     res.json(result.rows[0]);
   } catch (e: any) {
-    res.status(500).json({ error: e.message });
+    console.error("Register Error:", e);
+    res.status(500).json({ error: "Registration failed. User may already exist." });
   }
 });
 
@@ -100,13 +111,17 @@ app.post('/api/auth/login', async (req, res) => {
     if (result.rows.length === 0) return res.status(401).json({ error: "User not found" });
 
     const user = result.rows[0];
+    // Allow login if user has password (email provider)
+    if (!user.encrypted_password) return res.status(401).json({ error: "Please login with Google" });
+
     const valid = await bcrypt.compare(password, user.encrypted_password);
     if (!valid) return res.status(401).json({ error: "Invalid password" });
 
-    const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, process.env.JWT_SECRET as string, { expiresIn: '1h' });
+    const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, process.env.JWT_SECRET as string, { expiresIn: '12h' });
     res.json({ token, user: { id: user.id, email: user.email, role: user.role } });
   } catch (e: any) {
-    res.status(500).json({ error: e.message });
+    console.error("Login Error:", e);
+    res.status(500).json({ error: "Internal Server Error" });
   }
 });
 
@@ -114,7 +129,7 @@ app.get('/api/auth/google', passport.authenticate('google', { scope: ['profile',
 
 app.get('/api/auth/google/callback', passport.authenticate('google', { session: false }), (req: any, res) => {
   const user = req.user;
-  const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, process.env.JWT_SECRET as string, { expiresIn: '1h' });
+  const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, process.env.JWT_SECRET as string, { expiresIn: '12h' });
   // Redirect to frontend with token
   res.redirect(`${process.env.FRONTEND_URL}/#/?token=${token}`);
 });
@@ -123,7 +138,7 @@ app.get('/api/auth/google/callback', passport.authenticate('google', { session: 
 app.get('/api/health', async (req, res) => {
   try {
     await pool.query('SELECT 1');
-    res.json({ status: 'healthy', db: 'connected' });
+    res.json({ status: 'healthy', db: 'connected', version: '1.0.0' });
   } catch (e) {
     res.status(500).json({ status: 'unhealthy', db: 'disconnected' });
   }
@@ -147,8 +162,7 @@ app.get('/api/tables', authenticateJWT, async (req, res) => {
 app.get('/api/tables/:schema/:table/data', authenticateJWT, async (req, res) => {
   const { schema, table } = req.params;
   const { limit = 100, offset = 0 } = req.query;
-  // SECURITY WARNING: In a real app, strict validation of schema/table names is required to prevent injection.
-  // Using simple alphanumeric regex check here for safety.
+  
   if (!/^[a-zA-Z0-9_]+$/.test(schema) || !/^[a-zA-Z0-9_]+$/.test(table)) {
      return res.status(400).json({ error: "Invalid table name" });
   }
@@ -166,7 +180,6 @@ app.post('/api/sql', authenticateJWT, requireAdmin, async (req, res) => {
   const { query } = req.body;
   if (!query) return res.status(400).json({ error: "Query required" });
   
-  // DANGER: Executing raw SQL. Only admins.
   try {
     const result = await pool.query(query);
     res.json({ rows: result.rows, rowCount: result.rowCount, command: result.command });
@@ -178,7 +191,7 @@ app.post('/api/sql', authenticateJWT, requireAdmin, async (req, res) => {
 // Studio: Auth Management
 app.get('/api/users', authenticateJWT, requireAdmin, async (req, res) => {
   try {
-    const result = await pool.query('SELECT id, email, role, provider, created_at FROM auth.users LIMIT 100');
+    const result = await pool.query('SELECT id, email, role, provider, created_at FROM auth.users ORDER BY created_at DESC LIMIT 100');
     res.json(result.rows);
   } catch (e: any) {
     res.status(500).json({ error: e.message });
