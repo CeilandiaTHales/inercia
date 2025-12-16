@@ -11,7 +11,7 @@ services:
       POSTGRES_DB: ${DB_NAME}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./backend/init_sql.txt:/docker-entrypoint-initdb.d/init.sql
+     - ./backend/init.sql:/docker-entrypoint-initdb.d/init.sql
     networks:
       - inercia_net
     healthcheck:
@@ -30,7 +30,7 @@ services:
   api:
     build:
       context: ./backend
-      dockerfile: ../infrastructure/Dockerfile.node.txt
+      dockerfile: ../infrastructure/Dockerfile.node
     container_name: inercia_api
     restart: always
     environment:
@@ -53,7 +53,7 @@ services:
   worker:
     build:
       context: ./backend
-      dockerfile: ../infrastructure/Dockerfile.node.txt
+      dockerfile: ../infrastructure/Dockerfile.node
     container_name: inercia_worker
     restart: always
     command: ["npm", "run", "worker"]
@@ -69,7 +69,7 @@ services:
   studio:
     build:
       context: ./frontend
-      dockerfile: ../infrastructure/Dockerfile.react.txt
+      dockerfile: ../infrastructure/Dockerfile.react
     container_name: inercia_studio
     restart: always
     ports:
