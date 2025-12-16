@@ -1,0 +1,5 @@
+{
+  "name": "Inércia",
+  "description": "A self-hosted, production-grade Backend-as-a-Service (BaaS) featuring PostgreSQL, Real-time Auth, and a Studio Dashboard.",
+  "requestFramePermissions": []
+}

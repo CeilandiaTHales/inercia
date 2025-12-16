@@ -1,0 +1,87 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: inercia_db
+    restart: always
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/init_sql.txt:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - inercia_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: inercia_redis
+    restart: always
+    networks:
+      - inercia_net
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: ../infrastructure/Dockerfile.node.txt
+    container_name: inercia_api
+    restart: always
+    environment:
+      PORT: 3000
+      DATABASE_URL: postgres://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME}
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+      CALLBACK_URL: ${CALLBACK_URL}
+      FRONTEND_URL: ${FRONTEND_URL}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - inercia_net
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: ../infrastructure/Dockerfile.node.txt
+    container_name: inercia_worker
+    restart: always
+    command: ["npm", "run", "worker"]
+    environment:
+      DATABASE_URL: postgres://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME}
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_started
+    networks:
+      - inercia_net
+
+  studio:
+    build:
+      context: ./frontend
+      dockerfile: ../infrastructure/Dockerfile.react.txt
+    container_name: inercia_studio
+    restart: always
+    ports:
+      - "${PORT}:80"
+    depends_on:
+      - api
+    networks:
+      - inercia_net
+
+volumes:
+  postgres_data:
+
+networks:
+  inercia_net:
+    driver: bridge

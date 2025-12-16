@@ -1,0 +1,33 @@
+{
+  "name": "inércia",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3",
+    "react-router-dom": "^7.10.1",
+    "lucide-react": "^0.561.0",
+    "@vitejs/plugin-react": "^5.1.2",
+    "vite": "^7.3.0",
+    "cors": "^2.8.5",
+    "bcryptjs": "^3.0.3",
+    "jsonwebtoken": "^9.0.3",
+    "pg": "^8.16.3",
+    "dotenv": "^17.2.3",
+    "passport-google-oauth20": "^2.0.0",
+    "passport": "^0.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "typescript": "~5.8.2",
+    "vite": "^6.2.0"
+  }
+}
