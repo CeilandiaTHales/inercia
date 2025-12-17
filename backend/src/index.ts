@@ -14,6 +14,56 @@ const MODE = process.env.INSTANCE_MODE || 'CONTROL_PLANE';
 
 app.set('trust proxy', true);
 
+// --- BOOTSTRAP: Ensure System is Ready ---
+const bootstrap = async () => {
+    console.log(`[System] Starting bootstrap in ${MODE} mode...`);
+    const pool = getBasePool();
+    let retries = 5;
+    
+    while (retries > 0) {
+        try {
+            await pool.query('SELECT 1');
+            console.log("[System] Database connected successfully.");
+            break;
+        } catch (err) {
+            console.log(`[System] Waiting for database... (${retries} retries left)`);
+            retries--;
+            await new Promise(res => setTimeout(res, 3000));
+        }
+    }
+
+    if (MODE === 'CONTROL_PLANE') {
+        try {
+            // 1. Ensure Admin exists
+            const adminEmail = process.env.SUPER_ADMIN_EMAIL || 'admin@inercia.io';
+            const adminPass = process.env.SUPER_ADMIN_PASSWORD || 'admin123';
+            const userCheck = await pool.query('SELECT * FROM auth.users WHERE email = $1', [adminEmail]);
+            
+            if (userCheck.rows.length === 0) {
+                console.log(`[System] Seeding super admin: ${adminEmail}`);
+                const hashed = await bcrypt.hash(adminPass, 10);
+                await pool.query(
+                    'INSERT INTO auth.users (email, encrypted_password, role) VALUES ($1, $2, $3)',
+                    [adminEmail, hashed, 'admin']
+                );
+            }
+
+            // 2. Ensure Default Project exists
+            const projCheck = await pool.query("SELECT * FROM inercia_sys.projects WHERE slug = 'default'");
+            if (projCheck.rows.length === 0) {
+                console.log("[System] Seeding default project...");
+                await pool.query(
+                    "INSERT INTO inercia_sys.projects (name, slug, db_url, api_url, internal_port) VALUES ($1, $2, $3, $4, $5)",
+                    ['Meu Primeiro Projeto', 'default', 'SYSTEM_INTERNAL', 'http://localhost:3000', 3000]
+                );
+            }
+            console.log("[System] Bootstrap complete.");
+        } catch (err) {
+            console.error("[System] Bootstrap failed:", err);
+        }
+    }
+};
+
 // --- MIDDLEWARES ---
 const getContext = (req: any, res: any, next: NextFunction) => {
     (async () => {
@@ -58,12 +108,22 @@ const authenticate = (req: any, res: any, next: NextFunction) => {
 if (MODE === 'CONTROL_PLANE') {
     app.post('/api/auth/login', async (req: any, res: any) => {
         const { email, password } = req.body;
-        const result = await getBasePool().query(`SELECT * FROM auth.users WHERE email = $1`, [email]);
-        if (result.rows.length === 0) return res.status(401).json({ error: "Not found" });
-        const valid = await bcrypt.compare(password, result.rows[0].encrypted_password);
-        if (!valid) return res.status(401).json({ error: "Invalid" });
-        const token = jwt.sign({ id: result.rows[0].id, role: 'admin' }, process.env.JWT_SECRET as string, { expiresIn: '24h' });
-        res.json({ token });
+        try {
+            const result = await getBasePool().query(`SELECT * FROM auth.users WHERE email = $1`, [email]);
+            if (result.rows.length === 0) return res.status(401).json({ error: "User not found" });
+            
+            const valid = await bcrypt.compare(password, result.rows[0].encrypted_password);
+            if (!valid) return res.status(401).json({ error: "Invalid credentials" });
+            
+            const token = jwt.sign(
+                { id: result.rows[0].id, role: result.rows[0].role }, 
+                process.env.JWT_SECRET as string, 
+                { expiresIn: '24h' }
+            );
+            res.json({ token });
+        } catch (e: any) {
+            res.status(500).json({ error: e.message });
+        }
     });
 
     app.get('/api/projects', authenticate, async (req: any, res: any) => {
@@ -83,9 +143,9 @@ if (MODE === 'CONTROL_PLANE') {
     });
 
     app.get('/api/stats', authenticate, async (req: any, res: any) => {
-        if (!req.projectPool) return res.json({ user_count: 0 });
+        const pool = req.projectPool || getBasePool();
         try {
-            const r = await req.projectPool.query('SELECT count(*) as count FROM auth.users');
+            const r = await pool.query('SELECT count(*) as count FROM auth.users');
             res.json({ user_count: r.rows[0].count });
         } catch (e) { res.json({ user_count: 0 }); }
     });
@@ -93,15 +153,12 @@ if (MODE === 'CONTROL_PLANE') {
 
 // --- ROUTES: BAAS API ---
 app.get('/api/tables', authenticate, async (req: any, res: any) => {
-    if (!req.projectPool) return res.status(400).json({ error: "No context" });
-    const r = await req.projectPool.query(`SELECT table_name, table_schema FROM information_schema.tables WHERE table_schema = 'public'`);
+    const pool = req.projectPool || getBasePool();
+    const r = await pool.query(`SELECT table_name, table_schema FROM information_schema.tables WHERE table_schema = 'public'`);
     res.json(r.rows);
 });
 
-app.get('/api/rest/v1/:table', authenticate, async (req: any, res: any) => {
-    if (!req.projectPool) return res.status(400).json({ error: "No context" });
-    const r = await req.projectPool.query(`SELECT * FROM public."${req.params.table}" LIMIT 100`);
-    res.json(r.rows);
+app.listen(PORT, async () => {
+    console.log(`🚀 Inércia ${MODE} online on port ${PORT}.`);
+    await bootstrap();
 });
-
-app.listen(PORT, () => console.log(`🚀 Inércia ${MODE} online.`));

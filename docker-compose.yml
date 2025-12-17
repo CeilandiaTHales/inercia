@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   postgres:
     image: postgres:15-alpine
@@ -16,12 +14,11 @@ services:
     networks:
       - inercia_net
     healthcheck:
-      # We use 'postgres' as host to ensure pg_isready checks the correct interface
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
-      interval: 10s
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-postgres}"]
+      interval: 5s
       timeout: 5s
-      retries: 10
-      start_period: 20s
+      retries: 5
+      start_period: 10s
 
   api:
     build:
@@ -37,6 +34,8 @@ services:
       DATABASE_URL: postgres://${DB_USER:-postgres}:${DB_PASSWORD:-admin123}@postgres:5432/${DB_NAME:-inercia_base}
       JWT_SECRET: ${JWT_SECRET:-secret123}
       TZ: ${GENERIC_TIMEZONE:-America/Sao_Paulo}
+      SUPER_ADMIN_EMAIL: ${SUPER_ADMIN_EMAIL:-admin@inercia.io}
+      SUPER_ADMIN_PASSWORD: ${SUPER_ADMIN_PASSWORD:-admin123}
     depends_on:
       postgres:
         condition: service_healthy
