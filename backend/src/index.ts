@@ -307,7 +307,43 @@ app.post('/api/auth/providers', authenticateJWT, requireAdmin, async (req, res) 
     } catch (e:any) { res.status(500).json({error: e.message}); }
 });
 
-// CRUD & DATA
+// --- REST V1 (SUPABASE STYLE) ---
+app.get('/api/rest/v1/:table', authenticateJWT, async (req, res) => {
+    const { table } = req.params;
+    const { select, limit = 100, offset = 0, ...filters } = req.query;
+    const schema = 'public';
+    
+    // Safety check for table name
+    if (!/^[a-zA-Z0-9_]+$/.test(table)) return res.status(400).json({error: "Invalid table name"});
+
+    try {
+        // Basic filtering support
+        let query = `SELECT ${select || '*'} FROM "${schema}"."${table}"`;
+        const values: any[] = [];
+        const conditions: string[] = [];
+
+        Object.entries(filters).forEach(([key, value]) => {
+            if (/^[a-zA-Z0-9_]+$/.test(key)) {
+                values.push(value);
+                conditions.push(`"${key}" = $${values.length}`);
+            }
+        });
+
+        if (conditions.length > 0) {
+            query += ` WHERE ${conditions.join(' AND ')}`;
+        }
+
+        query += ` LIMIT $${values.length + 1} OFFSET $${values.length + 2}`;
+        values.push(limit, offset);
+
+        const result = await pool.query(query, values);
+        res.json(result.rows);
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// CRUD & DATA (LEGACY/INTERNAL)
 app.get('/api/tables', authenticateJWT, async (req, res) => {
   try {
     const result = await pool.query(`SELECT table_schema, table_name FROM information_schema.tables WHERE table_schema NOT IN ('information_schema', 'pg_catalog', 'inercia_sys') ORDER BY table_schema, table_name`);
@@ -459,6 +495,28 @@ app.post('/api/rpc/drop', authenticateJWT, requireAdmin, async (req, res) => {
     } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
+// RPC EXECUTE
+app.post('/api/rpc/:functionName', authenticateJWT, async (req, res) => { 
+    try { 
+        let { functionName } = req.params;
+        let schema = 'public';
+        
+        // Handle Schema.Function format
+        if (functionName.includes('.')) {
+            const parts = functionName.split('.');
+            schema = parts[0];
+            functionName = parts[1];
+        }
+
+        const values = Object.values(req.body || {}); 
+        const placeholders = values.map((_, i) => `$${i + 1}`).join(','); 
+        
+        // Use double quotes to handle case sensitivity and schema
+        const r = await pool.query(`SELECT * FROM "${schema}"."${functionName}"(${placeholders})`, values); 
+        res.json(r.rows); 
+    } catch (e: any) { res.status(400).json({ error: e.message }); } 
+});
+
 // FILES
 app.get('/api/files', authenticateJWT, async (req, res) => { try { const r = await pool.query(`SELECT id, name, content, schema_name, type FROM inercia_sys.files`); res.json(r.rows); } catch(e:any) { res.status(500).json({error:e.message}); } });
 app.post('/api/files', authenticateJWT, requireAdmin, async (req, res) => {
@@ -536,7 +594,6 @@ app.post('/api/schemas', authenticateJWT, requireAdmin, async (req, res) => { tr
 app.put('/api/schemas/:name', authenticateJWT, requireAdmin, async (req, res) => { try { await pool.query(`ALTER SCHEMA "${req.params.name}" RENAME TO "${req.body.newName}"`); res.json({ success: true }); } catch (e: any) { res.status(500).json({ error: e.message }); } });
 app.delete('/api/schemas/:name', authenticateJWT, requireAdmin, async (req, res) => { try { await pool.query(`DROP SCHEMA "${req.params.name}" CASCADE`); res.json({ success: true }); } catch (e: any) { res.status(500).json({ error: e.message }); } });
 app.get('/api/rpc', authenticateJWT, async (req, res) => { try { const r = await pool.query(`SELECT n.nspname as schema, p.proname as name, pg_get_function_arguments(p.oid) as args, pg_get_functiondef(p.oid) as def FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND p.proname NOT LIKE 'pg_%' AND p.proname NOT LIKE 'uuid_%' ORDER BY n.nspname, p.proname;`); res.json(r.rows); } catch (e: any) { res.status(500).json({ error: e.message }); } });
-app.post('/api/rpc/:functionName', authenticateJWT, async (req, res) => { try { const values = Object.values(req.body || {}); const placeholders = values.map((_, i) => `$${i + 1}`).join(','); const r = await pool.query(`SELECT * FROM "${req.params.functionName}"(${placeholders})`, values); res.json(r.rows); } catch (e: any) { res.status(400).json({ error: e.message }); } });
 app.post('/api/sql', authenticateJWT, requireAdmin, async (req, res) => { 
     try { 
         const { query, schema } = req.body;

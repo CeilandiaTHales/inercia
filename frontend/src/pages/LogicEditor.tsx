@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../api';
-import { Folder, FileCode, Play, Plus, ChevronRight, ChevronDown, FolderPlus, FileText, Trash2, Edit2, Save, Search, Zap, ArrowRight, Eye, EyeOff, Copy } from 'lucide-react';
+import { Folder, FileCode, Play, Plus, ChevronRight, ChevronDown, FolderPlus, FileText, Trash2, Edit2, Save, Search, Zap, ArrowRight, Eye, EyeOff, Copy, Terminal, CheckCircle } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
 
 interface TreeItem {
@@ -26,9 +26,16 @@ const LogicEditor = () => {
   const [result, setResult] = useState<any>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [apiKeys, setApiKeys] = useState({ anon: '', service: '' });
-  const [showKeys, setShowKeys] = useState(false);
   const [config, setConfig] = useState<any>({});
   
+  // TESTER STATE
+  const [testParams, setTestParams] = useState('{}');
+  const [testResult, setTestResult] = useState<any>(null);
+  const [testing, setTesting] = useState(false);
+  
+  // TOAST NOTIFICATION
+  const [toast, setToast] = useState<{msg: string, type: 'success'|'error'} | null>(null);
+
   // TRIGGERS STATE
   const [triggers, setTriggers] = useState<any[]>([]);
   const [tables, setTables] = useState<any[]>([]);
@@ -58,6 +65,12 @@ const LogicEditor = () => {
     return () => window.removeEventListener('click', close);
   }, []);
 
+  // Toast Helper
+  const showToast = (msg: string, type: 'success'|'error' = 'success') => {
+      setToast({ msg, type });
+      setTimeout(() => setToast(null), 3000);
+  };
+
   const fetchKeys = async () => {
       try {
           const k = await api.get('/auth/keys');
@@ -73,7 +86,6 @@ const LogicEditor = () => {
             api.get('/files')
         ]);
 
-        // Keep funcs for trigger selector
         setFuncsList(funcs);
 
         const root: Record<string, TreeItem[]> = {};
@@ -117,7 +129,11 @@ const LogicEditor = () => {
 
   const handleSelect = (item: TreeItem) => {
       setSelectedItem(item);
-      if (item.type === 'function') setCode(item.def || '');
+      if (item.type === 'function') {
+          setCode(item.def || '');
+          setTestResult(null);
+          setTestParams('{}');
+      }
       else if (item.type === 'file') setCode(item.content || '');
       setResult(null);
   };
@@ -142,21 +158,15 @@ const LogicEditor = () => {
       const contextSchema = payload?.schema || selectedItem?.schema || activeSchema; 
       let sqlToRun = payload?.sql || code;
       
-      // Handle Versioning
       if (payload?.version) {
-          // Add suffix to name in SQL
           let newName = `${payload.name}_1`;
-          let counter = 1;
-          // Simple check if name_1 exists locally would be better, but simplified here:
-          // Just replace the name in the CREATE statement
-          sqlToRun = sqlToRun.replace(new RegExp(payload.name, 'g'), newName); // Basic replace
+          sqlToRun = sqlToRun.replace(new RegExp(payload.name, 'g'), newName);
       }
       
-      // Handle Full Overwrite (Delete then Create)
       if (payload?.overwrite) {
           try {
               await api.post('/rpc/drop', { schema: payload.schema, name: payload.name });
-          } catch(e) { console.error("Drop failed, maybe didn't exist", e); }
+          } catch(e) { console.error("Drop failed", e); }
       }
 
       try {
@@ -166,33 +176,37 @@ const LogicEditor = () => {
               loadTree(); 
               loadTriggersData(); 
               setModalType(null);
+              showToast("Função salva com sucesso!");
+          } else {
+              showToast("SQL executado com sucesso!");
           }
       } catch (e: any) {
           setResult({ status: 'error', message: e.message });
+          showToast(e.message, 'error');
       }
   };
 
   const checkAndRun = async () => {
       setResult(null);
-      // File Handling
       if (selectedItem?.type === 'file' && selectedItem.id) {
           try {
               await api.put(`/files/${selectedItem.id}`, { content: code });
               setResult({ status: 'success', data: { message: "Arquivo salvo com sucesso!" } });
               loadTree();
-          } catch(e:any) { setResult({ status: 'error', message: "Erro: " + e.message }); }
+              showToast("Arquivo salvo!");
+          } catch(e:any) { 
+              setResult({ status: 'error', message: "Erro: " + e.message }); 
+              showToast("Erro ao salvar arquivo", 'error');
+          }
           return;
       }
 
-      // Function Handling
       const meta = extractFunctionName(code);
       if (!meta) {
-          // If simply executing SQL without function definition
           executeSave();
           return;
       }
 
-      // Check if exists
       const exists = funcsList.find(f => f.name === meta.name && f.schema === meta.schema);
       if (exists) {
           setOverwritePayload({ name: meta.name, schema: meta.schema, sql: code });
@@ -202,30 +216,57 @@ const LogicEditor = () => {
       }
   };
 
-  const copyToClipboard = (text: string) => {
-      navigator.clipboard.writeText(text);
-      alert("Copiado!");
+  const runTester = async () => {
+      if (!selectedItem || selectedItem.type !== 'function') return;
+      setTesting(true);
+      setTestResult(null);
+      try {
+          let body = {};
+          try { body = JSON.parse(testParams); } catch(e) { throw new Error("JSON inválido nos parâmetros."); }
+          
+          const res = await api.post(`/rpc/${selectedItem.schema}.${selectedItem.name}`, body);
+          setTestResult(res);
+          showToast("Função executada via API!");
+      } catch (e: any) {
+          setTestResult({ error: e.message });
+          showToast("Erro na execução", 'error');
+      } finally {
+          setTesting(false);
+      }
   };
 
-  // ... Trigger handlers ...
+  const copyCurl = () => {
+      if (!selectedItem || selectedItem.type !== 'function') return;
+      const url = `${config.apiExternalUrl || 'http://localhost:3000'}/api/rpc/${selectedItem.schema}.${selectedItem.name}`;
+      const curl = `curl -X POST ${url} \\
+  -H "Authorization: Bearer ${apiKeys.anon}" \\
+  -H "apikey: ${apiKeys.anon}" \\
+  -H "Content-Type: application/json" \\
+  -d '${testParams.replace(/'/g, "'\\''")}'`;
+      
+      navigator.clipboard.writeText(curl);
+      showToast("cURL copiado com chaves API!");
+  };
+
+  // ... Trigger handlers ... (No changes needed)
   const handleCreateTrigger = async () => {
-      if(!newTrigger.table || !newTrigger.function) return alert("Selecione tabela e função.");
+      if(!newTrigger.table || !newTrigger.function) return showToast("Selecione tabela e função.", 'error');
       const tableName = newTrigger.table;
       const schemaName = tables.find(t => t.table_name === tableName)?.table_schema || 'public';
       const funcName = newTrigger.function;
       const triggerName = `trig_${tableName}_${newTrigger.event.toLowerCase()}`;
       try {
           await api.post('/triggers', { schema: schemaName, table: tableName, name: triggerName, timing: newTrigger.timing, event: newTrigger.event, functionName: funcName });
-          setModalType(null); loadTriggersData();
-      } catch(e: any) { alert(e.message); }
+          setModalType(null); loadTriggersData(); showToast("Gatilho criado!");
+      } catch(e: any) { showToast(e.message, 'error'); }
   }
-  const handleDeleteTrigger = async (t: any) => { if(!confirm("Excluir gatilho?")) return; try { await api.delete('/triggers', { schema: t.schema, table: t.table, name: t.trigger_name }); loadTriggersData(); } catch(e:any) { alert(e.message); } }
+  const handleDeleteTrigger = async (t: any) => { if(!confirm("Excluir gatilho?")) return; try { await api.delete('/triggers', { schema: t.schema, table: t.table, name: t.trigger_name }); loadTriggersData(); showToast("Gatilho removido."); } catch(e:any) { showToast(e.message, 'error'); } }
 
-  // ... Folder/Item handlers ...
-  const handleCreateFolder = async () => { try { await api.post('/schemas', { name: itemName }); closeModal(); loadTree(); } catch(e:any) { alert(e.message); } }
-  const handleCreateItem = async () => { try { const schema = targetSchema; if (itemType === 'file') { await api.post('/files', { name: itemName, content: '', schema_name: schema, type: 'txt' }); } else { const template = `CREATE OR REPLACE FUNCTION ${itemName}() RETURNS TRIGGER AS $$ \nBEGIN \n  -- Logic here\n  RETURN NEW; \nEND; \n$$ LANGUAGE plpgsql;`; setCode(template); setActiveSchema(schema); setSelectedItem({ name: itemName, type: 'function', schema: schema }); } closeModal(); loadTree(); } catch(e:any) { alert(e.message); } }
-  const handleDeleteFolder = async () => { if(!contextMenu) return; if(!confirm(`Excluir pasta "${contextMenu.folder}"?`)) return; try { await api.delete(`/schemas/${contextMenu.folder}`); loadTree(); } catch(e:any) { alert(e.message); } }
-  const handleRenameFolder = async () => { if(!contextMenu) return; const newName = prompt("Novo nome:", contextMenu.folder); if(newName && newName !== contextMenu.folder) { try { await api.put(`/schemas/${contextMenu.folder}`, { newName }); loadTree(); } catch(e:any) { alert(e.message); } } }
+  // ... Folder/Item handlers ... (No changes needed)
+  const handleCreateFolder = async () => { try { await api.post('/schemas', { name: itemName }); closeModal(); loadTree(); showToast("Pasta criada"); } catch(e:any) { showToast(e.message, 'error'); } }
+  const handleCreateItem = async () => { try { const schema = targetSchema; if (itemType === 'file') { await api.post('/files', { name: itemName, content: '', schema_name: schema, type: 'txt' }); } else { const template = `CREATE OR REPLACE FUNCTION ${itemName}() RETURNS TRIGGER AS $$ \nBEGIN \n  -- Logic here\n  RETURN NEW; \nEND; \n$$ LANGUAGE plpgsql;`; setCode(template); setActiveSchema(schema); setSelectedItem({ name: itemName, type: 'function', schema: schema }); } closeModal(); loadTree(); showToast("Item criado"); } catch(e:any) { showToast(e.message, 'error'); } }
+  const handleDeleteFolder = async () => { if(!contextMenu) return; if(!confirm(`Excluir pasta "${contextMenu.folder}"?`)) return; try { await api.delete(`/schemas/${contextMenu.folder}`); loadTree(); showToast("Pasta excluída"); } catch(e:any) { showToast(e.message, 'error'); } }
+  const handleRenameFolder = async () => { if(!contextMenu) return; const newName = prompt("Novo nome:", contextMenu.folder); if(newName && newName !== contextMenu.folder) { try { await api.put(`/schemas/${contextMenu.folder}`, { newName }); loadTree(); showToast("Renomeado!"); } catch(e:any) { showToast(e.message, 'error'); } } }
   const openCreateItemModal = (schema: string) => { setTargetSchema(schema); setModalType('createItem'); setItemName(''); }
   const onContextMenu = (e: React.MouseEvent, folder: string) => { e.preventDefault(); setContextMenu({ x: e.clientX, y: e.clientY, folder }); }
   const closeModal = () => { setModalType(null); setItemName(''); }
@@ -241,7 +282,15 @@ const LogicEditor = () => {
   });
 
   return (
-    <div className="flex flex-col h-full gap-4">
+    <div className="flex flex-col h-full gap-4 relative">
+        {/* TOAST NOTIFICATION */}
+        {toast && (
+            <div className={`fixed top-6 right-6 z-[100] px-6 py-3 rounded-lg shadow-2xl flex items-center gap-3 animate-bounce-in transition-all ${toast.type === 'success' ? 'bg-emerald-600 text-white' : 'bg-red-600 text-white'}`}>
+                {toast.type === 'success' ? <CheckCircle size={20} /> : <Zap size={20} />}
+                <span className="font-bold text-sm">{toast.msg}</span>
+            </div>
+        )}
+
         {/* TOP TABS */}
         <div className="flex gap-4 border-b border-slate-700 pb-2">
             <button onClick={() => setActiveTab('code')} className={`flex items-center gap-2 px-4 py-2 rounded font-bold text-sm ${activeTab === 'code' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-800'}`}><FileCode size={16} /> Code Editor</button>
@@ -360,7 +409,8 @@ const LogicEditor = () => {
                             placeholder="-- Escreva SQL aqui. O código será executado no contexto da pasta selecionada."
                         />
                     </div>
-                    {result && (
+                    {/* Only show Code Execution Result if it's NOT a function test (which has its own panel) */}
+                    {result && selectedItem?.type !== 'function' && (
                         <div className="h-40 bg-slate-800 border border-slate-700 rounded flex flex-col overflow-hidden">
                             <div className="bg-slate-900 p-2 border-b border-slate-700 text-xs font-bold text-slate-400">Resultados</div>
                             <div className="flex-1 p-4 overflow-auto font-mono text-xs text-slate-300">
@@ -370,51 +420,51 @@ const LogicEditor = () => {
                     )}
                 </div>
 
-                {/* RIGHT PANEL: Tester & Details */}
-                <div className="w-80 flex-shrink-0 bg-slate-800 rounded border border-slate-700 flex flex-col overflow-hidden">
-                    <div className="p-3 bg-slate-900 border-b border-slate-700 font-bold text-white text-sm">
-                        Detalhes da Função
-                    </div>
-                    <div className="flex-1 overflow-y-auto p-4 space-y-6">
-                        {selectedItem ? (
-                            <>
-                                <div>
-                                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Conexão API (cURL)</label>
-                                    <div className="bg-black/50 border border-slate-700 rounded p-3 relative group">
-                                        <div className="absolute top-2 right-2 flex gap-1">
-                                            <button onClick={() => setShowKeys(!showKeys)} className="p-1 text-slate-400 hover:text-white bg-slate-800 rounded">{showKeys ? <EyeOff size={12}/> : <Eye size={12}/>}</button>
-                                            <button onClick={() => copyToClipboard(`curl -X POST ${config.apiExternalUrl}/api/rpc/${selectedItem.name} -H "Authorization: Bearer ${apiKeys.anon}" -H "apikey: ${apiKeys.anon}" -d '{}'`)} className="p-1 text-slate-400 hover:text-white bg-slate-800 rounded"><Copy size={12}/></button>
-                                        </div>
-                                        <code className="text-[10px] text-green-400 font-mono break-all whitespace-pre-wrap">
-                                            curl -X POST {config.apiExternalUrl || '...'}/api/rpc/<span className="text-yellow-400 font-bold">{selectedItem.name}</span> \<br/>
-                                            -H "Authorization: Bearer <span className="text-blue-400">{showKeys ? apiKeys.anon : 'ANON_KEY'}</span>" \<br/>
-                                            -H "apikey: <span className="text-blue-400">{showKeys ? apiKeys.anon : 'ANON_KEY'}</span>" \<br/>
-                                            -H "Content-Type: application/json" \<br/>
-                                            -d '{`{}`}'
-                                        </code>
-                                    </div>
-                                    <p className="text-[10px] text-slate-500 mt-2">
-                                        A <b>Anon Key</b> é segura para usar em sites públicos (frontend). Use a <b>Service Key</b> apenas no servidor.
-                                    </p>
+                {/* RIGHT PANEL: TESTER (Only for Functions) */}
+                {selectedItem?.type === 'function' && (
+                    <div className="w-80 flex-shrink-0 bg-slate-800 rounded border border-slate-700 flex flex-col overflow-hidden">
+                        <div className="p-3 bg-slate-900 border-b border-slate-700 flex justify-between items-center">
+                            <span className="font-bold text-white text-sm flex items-center gap-2"><Terminal size={14}/> Testador de API</span>
+                            <div className="bg-slate-800 px-2 py-0.5 rounded text-[10px] text-emerald-400 border border-emerald-900">RPC</div>
+                        </div>
+                        <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
+                             <div>
+                                <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Argumentos (JSON)</label>
+                                <textarea 
+                                    className="w-full h-24 bg-slate-950 border border-slate-700 rounded p-2 text-emerald-300 font-mono text-xs focus:outline-none focus:border-emerald-500 resize-none"
+                                    value={testParams}
+                                    onChange={e => setTestParams(e.target.value)}
+                                    placeholder="{}"
+                                />
+                             </div>
+
+                             <button 
+                                onClick={runTester}
+                                disabled={testing}
+                                className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2 rounded text-xs flex items-center justify-center gap-2"
+                             >
+                                <Play size={14} /> {testing ? 'Executando...' : 'Testar Função'}
+                             </button>
+
+                             <div className="flex-1 flex flex-col min-h-0 border-t border-slate-700 pt-4">
+                                <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">Resultado</label>
+                                <div className="flex-1 bg-slate-950 border border-slate-700 rounded p-2 text-slate-300 font-mono text-xs overflow-auto">
+                                    {testResult ? JSON.stringify(testResult, null, 2) : <span className="text-slate-600 italic">// Aguardando execução...</span>}
                                 </div>
-                                
-                                {selectedItem.args && (
-                                    <div>
-                                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Argumentos Esperados</label>
-                                        <div className="text-xs font-mono text-slate-300 bg-slate-900 p-2 rounded border border-slate-700">
-                                            {selectedItem.args}
-                                        </div>
-                                    </div>
-                                )}
-                            </>
-                        ) : (
-                            <div className="text-center text-slate-500 mt-10">
-                                <Zap size={32} className="mx-auto mb-2 opacity-30"/>
-                                <p className="text-xs">Selecione uma função para ver detalhes de conexão e teste.</p>
-                            </div>
-                        )}
+                             </div>
+
+                             <button 
+                                onClick={copyCurl} 
+                                className="mt-2 w-full bg-slate-700 hover:bg-slate-600 text-slate-200 border border-slate-600 py-2 rounded text-xs font-bold flex items-center justify-center gap-2"
+                             >
+                                <Copy size={14}/> Copiar cURL de Integração
+                             </button>
+                             <p className="text-[10px] text-center text-slate-500">
+                                Copia o comando completo com chaves e parâmetros.
+                             </p>
+                        </div>
                     </div>
-                </div>
+                )}
             </div>
         )}
 
