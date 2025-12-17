@@ -266,6 +266,13 @@ app.post('/api/auth/login', async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: "Internal Error" }); }
 });
 
+app.get('/api/auth/keys', authenticateJWT, requireAdmin, (req, res) => {
+    // Generates long-lived API keys for API usage
+    const anonKey = jwt.sign({ role: 'anon' }, process.env.JWT_SECRET as string, { expiresIn: '10y' });
+    const serviceKey = jwt.sign({ role: 'service_role' }, process.env.JWT_SECRET as string, { expiresIn: '10y' });
+    res.json({ anon: anonKey, service: serviceKey });
+});
+
 app.get('/api/auth/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
 app.get('/api/auth/google/callback', passport.authenticate('google', { session: false }), (req: any, res) => {
     const token = jwt.sign(
@@ -365,6 +372,93 @@ app.delete('/api/tables/:schema/:table/data/:id', authenticateJWT, async (req, r
     } catch (e: any) { res.status(400).json({ error: e.message }); }
 });
 
+// BULK DELETE WITH GAP FILL
+app.post('/api/tables/:schema/:table/rows/delete', authenticateJWT, requireAdmin, async (req, res) => {
+    const { schema, table } = req.params;
+    const { ids, gapFill, pk } = req.body; 
+    if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({error: "No IDs provided"});
+
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        
+        if (gapFill) {
+            const params = ids.map((_, i) => `$${i+1}`).join(',');
+            await client.query(`DELETE FROM "${schema}"."${table}" WHERE "${pk}" IN (${params})`, ids);
+            const candidatesRes = await client.query(
+                `SELECT "${pk}" FROM "${schema}"."${table}" WHERE "${pk}" NOT IN (${ids.join(',')}) ORDER BY "${pk}" DESC LIMIT ${ids.length}`
+            );
+            const candidateIds = candidatesRes.rows.map(r => r[pk]);
+            for (let i = 0; i < candidateIds.length; i++) {
+                if (i < ids.length) {
+                    const hole = ids[i];
+                    const filler = candidateIds[i];
+                    await client.query(`DELETE FROM "${schema}"."${table}" WHERE "${pk}" = $1`, [hole]);
+                    await client.query(`UPDATE "${schema}"."${table}" SET "${pk}" = $1 WHERE "${pk}" = $2`, [hole, filler]);
+                }
+            }
+            const remainingToDelete = ids.slice(candidateIds.length);
+            if (remainingToDelete.length > 0) {
+                 const p = remainingToDelete.map((_:any, i:number) => `$${i+1}`).join(',');
+                 await client.query(`DELETE FROM "${schema}"."${table}" WHERE "${pk}" IN (${p})`, remainingToDelete);
+            }
+        } else {
+            const params = ids.map((_, i) => `$${i+1}`).join(',');
+            await client.query(`DELETE FROM "${schema}"."${table}" WHERE "${pk}" IN (${params})`, ids);
+        }
+        await client.query('COMMIT'); res.json({ success: true });
+    } catch (e: any) { await client.query('ROLLBACK'); res.status(500).json({ error: e.message }); } finally { client.release(); }
+});
+
+// TRIGGERS (MANAGEMENT)
+app.get('/api/triggers', authenticateJWT, async (req, res) => {
+    try {
+        const query = `
+            SELECT 
+                event_object_schema as schema, 
+                event_object_table as table, 
+                trigger_name, 
+                action_timing, 
+                event_manipulation as event, 
+                action_statement
+            FROM information_schema.triggers
+            WHERE trigger_schema NOT IN ('pg_catalog', 'information_schema')
+        `;
+        const result = await pool.query(query);
+        res.json(result.rows);
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/triggers', authenticateJWT, requireAdmin, async (req, res) => {
+    const { schema, table, name, timing, event, functionName } = req.body;
+    try {
+        const sql = `
+            CREATE TRIGGER "${name}"
+            ${timing} ${event} ON "${schema}"."${table}"
+            FOR EACH ROW EXECUTE FUNCTION "${schema}"."${functionName}"();
+        `;
+        await pool.query(sql);
+        res.json({ success: true });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/triggers', authenticateJWT, requireAdmin, async (req, res) => {
+    const { schema, table, name } = req.body;
+    try {
+        await pool.query(`DROP TRIGGER IF EXISTS "${name}" ON "${schema}"."${table}"`);
+        res.json({ success: true });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+// RPC DROP
+app.post('/api/rpc/drop', authenticateJWT, requireAdmin, async (req, res) => {
+    const { schema, name } = req.body;
+    try {
+        await pool.query(`DROP FUNCTION IF EXISTS "${schema}"."${name}" CASCADE`);
+        res.json({ success: true });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
 // FILES
 app.get('/api/files', authenticateJWT, async (req, res) => { try { const r = await pool.query(`SELECT id, name, content, schema_name, type FROM inercia_sys.files`); res.json(r.rows); } catch(e:any) { res.status(500).json({error:e.message}); } });
 app.post('/api/files', authenticateJWT, requireAdmin, async (req, res) => {
@@ -379,7 +473,6 @@ app.put('/api/files/:id', authenticateJWT, requireAdmin, async (req, res) => {
 
 // --- RLS POLICIES ---
 app.get('/api/policies', authenticateJWT, async (req, res) => {
-    // Return empty array if error to prevent frontend crash
     try { const r = await pool.query('SELECT * FROM pg_policies'); res.json(r.rows); } catch(e) { res.json([]); }
 });
 

@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { api } from '../api';
-import { Plus, Trash2, Edit2, Save, X, Search, Upload, FilePlus, GripHorizontal, Copy, Pencil } from 'lucide-react';
+import { Plus, Trash2, Edit2, Save, X, Search, Upload, FilePlus, GripHorizontal, Copy, Pencil, Download, CheckSquare, Square, Layers } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
 
 const TableEditor = () => {
@@ -12,6 +12,9 @@ const TableEditor = () => {
   const [pk, setPk] = useState<string>('id');
   const [loading, setLoading] = useState(false);
   const [filter, setFilter] = useState('');
+
+  // Multi Selection
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   // Column Management (Order & Width)
   const [orderedColumns, setOrderedColumns] = useState<any[]>([]);
@@ -41,8 +44,12 @@ const TableEditor = () => {
   const [showRenameModal, setShowRenameModal] = useState(false);
   const [renameTarget, setRenameTarget] = useState<any>(null);
   const [newName, setNewName] = useState('');
-  const [showDeleteConfirm, setShowDeleteConfirm] = useState<any>(null); // holds table obj to delete
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState<any>(null);
   const [deleteConfirmationName, setDeleteConfirmationName] = useState('');
+
+  // BULK DELETE MODAL
+  const [showBulkDelete, setShowBulkDelete] = useState(false);
+  const [bulkGapFill, setBulkGapFill] = useState(false);
 
   useEffect(() => { refreshTables(); }, []);
   
@@ -59,6 +66,7 @@ const TableEditor = () => {
     setSelectedTable({ schema, table });
     setIsAdding(false);
     setEditingId(null);
+    setSelectedIds(new Set()); // Reset selection
     try {
         const meta = await api.get(`/tables/${schema}/${table}/meta`);
         setColumns(meta);
@@ -75,14 +83,46 @@ const TableEditor = () => {
     finally { setLoading(false); }
   };
 
+  // --- Multi Selection Logic ---
+  const toggleSelectAll = () => {
+      if (selectedIds.size === rows.length && rows.length > 0) {
+          setSelectedIds(new Set());
+      } else {
+          setSelectedIds(new Set(rows.map(r => r[pk].toString())));
+      }
+  };
+
+  const toggleSelectRow = (id: string) => {
+      const newSet = new Set(selectedIds);
+      if (newSet.has(id)) newSet.delete(id);
+      else newSet.add(id);
+      setSelectedIds(newSet);
+  };
+
+  const getSelectedRowsData = () => {
+      return rows.filter(r => selectedIds.has(r[pk].toString()));
+  }
+
   // --- Context Menu Handlers ---
   const handleContextMenu = (e: React.MouseEvent, table: any) => {
       e.preventDefault();
       setContextMenu({ x: e.clientX, y: e.clientY, table });
   };
 
-  const handleCopyName = () => {
-      if(contextMenu) navigator.clipboard.writeText(contextMenu.table.table_name);
+  const handleCopyName = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      if(contextMenu) {
+          navigator.clipboard.writeText(contextMenu.table.table_name);
+          setContextMenu(null);
+      }
+  };
+
+  const handleCopySchema = (e: React.MouseEvent) => {
+      e.stopPropagation();
+      if(contextMenu) {
+          navigator.clipboard.writeText(contextMenu.table.table_schema);
+          setContextMenu(null);
+      }
   };
 
   const handleOpenRename = () => {
@@ -99,7 +139,7 @@ const TableEditor = () => {
           await api.post('/tables/rename', { schema: renameTarget.table_schema, oldName: renameTarget.table_name, newName });
           refreshTables();
           if(selectedTable?.table === renameTarget.table_name) {
-              setSelectedTable(null); // Deselect if renamed active table
+              setSelectedTable(null); 
           }
           setShowRenameModal(false);
       } catch(e:any) { alert(e.message); }
@@ -108,9 +148,8 @@ const TableEditor = () => {
   const handleDeleteRequest = async () => {
       if(!contextMenu) return;
       const t = contextMenu.table;
-      // Fetch count to decide logic
       try {
-          const res = await api.get(`/tables/${t.table_schema}/${t.table_name}/data?limit=6`); // Just need to know if > 5
+          const res = await api.get(`/tables/${t.table_schema}/${t.table_name}/data?limit=6`); 
           const count = res.data.length;
           if (count > 5) {
               setShowDeleteConfirm(t);
@@ -134,6 +173,58 @@ const TableEditor = () => {
           if(selectedTable?.table === showDeleteConfirm.table_name) setSelectedTable(null);
           setShowDeleteConfirm(null);
       } catch(e:any) { alert(e.message); }
+  };
+
+
+  // --- Bulk Actions ---
+  const handleBulkDownload = () => {
+      const selectedData = getSelectedRowsData();
+      if(selectedData.length === 0) return;
+      const headers = Object.keys(selectedData[0]);
+      const csv = [
+          headers.join(','),
+          ...selectedData.map(row => headers.map(fieldName => JSON.stringify(row[fieldName])).join(','))
+      ].join('\n');
+      
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${selectedTable.table}_selected.csv`;
+      a.click();
+  };
+
+  const handleBulkCopy = () => {
+      const selectedData = getSelectedRowsData();
+      if(selectedData.length === 0) return;
+      const headers = Object.keys(selectedData[0]);
+      const csv = [
+          headers.join(','),
+          ...selectedData.map(row => headers.map(fieldName => JSON.stringify(row[fieldName])).join(','))
+      ].join('\n');
+      navigator.clipboard.writeText(csv);
+      alert(`${selectedData.length} rows copied to clipboard as CSV!`);
+  };
+
+  const handleBulkDeleteInit = () => {
+      if (selectedIds.size === 0) return;
+      setBulkGapFill(false);
+      setShowBulkDelete(true);
+  };
+
+  const handleBulkDeleteExecute = async () => {
+      try {
+          await api.post(`/tables/${selectedTable.schema}/${selectedTable.table}/rows/delete`, {
+              ids: Array.from(selectedIds),
+              gapFill: bulkGapFill,
+              pk: pk
+          });
+          // Refresh data
+          fetchTableData(selectedTable.schema, selectedTable.table);
+          setShowBulkDelete(false);
+      } catch(e: any) {
+          alert(e.message);
+      }
   };
 
 
@@ -234,6 +325,12 @@ const TableEditor = () => {
       setRows(rows.filter(r => r[pk] !== id));
   };
 
+  // Determine if Gap Fill is applicable (simple check for integer pk)
+  const isGapFillAvailable = () => {
+      const pkCol = columns.find(c => c.column_name === pk);
+      return pkCol && (pkCol.data_type.includes('int') || pkCol.data_type.includes('serial'));
+  };
+
   return (
     <div className="flex h-full w-full gap-2 relative">
        {/* Context Menu */}
@@ -245,6 +342,7 @@ const TableEditor = () => {
            >
                 <div className="px-4 py-2 border-b border-slate-700 text-xs text-slate-500 font-bold uppercase">{contextMenu.table.table_name}</div>
                 <button onClick={handleCopyName} className="w-full text-left px-4 py-2 text-slate-300 hover:bg-slate-700 flex items-center gap-2"><Copy size={14}/> Copiar Nome</button>
+                <button onClick={handleCopySchema} className="w-full text-left px-4 py-2 text-slate-300 hover:bg-slate-700 flex items-center gap-2"><Layers size={14}/> Copiar Schema</button>
                 <button onClick={handleOpenRename} className="w-full text-left px-4 py-2 text-slate-300 hover:bg-slate-700 flex items-center gap-2"><Pencil size={14}/> Renomear</button>
                 <button onClick={handleDeleteRequest} className="w-full text-left px-4 py-2 text-red-400 hover:bg-slate-700 flex items-center gap-2"><Trash2 size={14}/> Excluir Tabela</button>
            </div>
@@ -269,6 +367,36 @@ const TableEditor = () => {
                    <p className="text-slate-400 text-sm mb-4">Esta tabela contém muitos dados. Para evitar acidentes, digite o nome da tabela <b>"{showDeleteConfirm.table_name}"</b> para confirmar a exclusão.</p>
                    <input className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-white mb-4" placeholder={showDeleteConfirm.table_name} value={deleteConfirmationName} onChange={e => setDeleteConfirmationName(e.target.value)} />
                    <div className="flex justify-end gap-2"><button onClick={() => setShowDeleteConfirm(null)} className="text-slate-400">Cancelar</button><button onClick={executeDelete} disabled={deleteConfirmationName !== showDeleteConfirm.table_name} className="bg-red-600 disabled:opacity-50 text-white px-4 py-2 rounded font-bold">Excluir Tabela</button></div>
+               </div>
+           </div>
+       )}
+
+       {/* Bulk Delete Modal */}
+       {showBulkDelete && (
+           <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+               <div className="bg-slate-900 border border-slate-700 rounded p-6 w-96 shadow-2xl">
+                   <h3 className="text-white font-bold mb-4 text-red-500 flex items-center gap-2"><Trash2/> Excluir {selectedIds.size} linhas?</h3>
+                   
+                   {isGapFillAvailable() ? (
+                        <div className="bg-slate-800 p-3 rounded mb-4">
+                             <label className="flex items-start gap-2 cursor-pointer">
+                                 <input type="checkbox" className="mt-1" checked={bulkGapFill} onChange={e => setBulkGapFill(e.target.checked)} />
+                                 <div>
+                                     <span className="text-white font-bold text-sm block">Preencher Lacunas</span>
+                                     <span className="text-slate-400 text-xs block mt-1">
+                                         Mover os últimos registros da tabela para ocupar os IDs que serão excluídos, mantendo a sequência numérica sem buracos.
+                                     </span>
+                                 </div>
+                             </label>
+                        </div>
+                   ) : (
+                       <p className="text-slate-500 text-sm mb-4">Esta tabela não usa ID numérico/serial, portanto a reordenação automática não está disponível.</p>
+                   )}
+
+                   <div className="flex justify-end gap-2">
+                       <button onClick={() => setShowBulkDelete(false)} className="text-slate-400">Cancelar</button>
+                       <button onClick={handleBulkDeleteExecute} className="bg-red-600 text-white px-4 py-2 rounded font-bold">Confirmar Exclusão</button>
+                   </div>
                </div>
            </div>
        )}
@@ -348,7 +476,21 @@ const TableEditor = () => {
       </div>
 
       {/* Main Data View */}
-      <div className="flex-1 bg-slate-800 rounded-lg border border-slate-700 flex flex-col overflow-hidden h-full shadow-xl">
+      <div className="flex-1 bg-slate-800 rounded-lg border border-slate-700 flex flex-col overflow-hidden h-full shadow-xl relative">
+          
+          {/* BULK ACTIONS BAR (FLOATING) */}
+          {selectedIds.size > 0 && (
+              <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-50 bg-slate-900 border border-slate-600 shadow-2xl rounded-full px-6 py-2 flex items-center gap-4 animate-bounce-in">
+                  <span className="text-white font-bold text-sm">{selectedIds.size} selecionados</span>
+                  <div className="h-4 w-px bg-slate-700"></div>
+                  <button onClick={handleBulkCopy} className="text-slate-300 hover:text-white flex items-center gap-1 text-xs font-medium" title="Copiar CSV"><Copy size={14}/> Copiar</button>
+                  <button onClick={handleBulkDownload} className="text-slate-300 hover:text-white flex items-center gap-1 text-xs font-medium" title="Baixar CSV"><Download size={14}/> Baixar</button>
+                  <div className="h-4 w-px bg-slate-700"></div>
+                  <button onClick={handleBulkDeleteInit} className="text-red-400 hover:text-red-300 flex items-center gap-1 text-xs font-medium"><Trash2 size={14}/> Excluir</button>
+                  <button onClick={() => setSelectedIds(new Set())} className="text-slate-500 hover:text-slate-300 ml-2"><X size={14}/></button>
+              </div>
+          )}
+
           {selectedTable ? (
               <>
                 <div className="p-3 bg-slate-900 border-b border-slate-700 flex justify-between items-center">
@@ -363,6 +505,11 @@ const TableEditor = () => {
                     <table className="w-full text-left border-collapse table-fixed">
                         <thead className="bg-slate-950 sticky top-0 z-20 shadow">
                             <tr>
+                                <th className="p-2 border-b border-slate-700 w-10 bg-slate-950 z-20 text-center">
+                                    <button onClick={toggleSelectAll} className="text-slate-500 hover:text-white">
+                                        {selectedIds.size > 0 && selectedIds.size === rows.length ? <CheckSquare size={14} className="text-emerald-500"/> : <Square size={14}/>}
+                                    </button>
+                                </th>
                                 <th className="p-2 border-b border-slate-700 w-10 bg-slate-950 z-20"></th>
                                 {orderedColumns.map((c, index) => (
                                     <th 
@@ -392,6 +539,7 @@ const TableEditor = () => {
                         <tbody className="divide-y divide-slate-700">
                             {isAdding && (
                                 <tr className="bg-emerald-900/10">
+                                    <td className="p-2 border-r border-slate-800"></td>
                                     <td className="p-2 text-emerald-500"><Plus size={16}/></td>
                                     {orderedColumns.map(c => (
                                         <td key={c.column_name} className="p-2 border-r border-slate-800">
@@ -407,8 +555,14 @@ const TableEditor = () => {
                             )}
                             {rows.map(r => {
                                 const isEditing = editingId === r[pk];
+                                const isSelected = selectedIds.has(r[pk].toString());
                                 return (
-                                    <tr key={r[pk]} className="hover:bg-slate-800/50 group">
+                                    <tr key={r[pk]} className={`hover:bg-slate-800/50 group ${isSelected ? 'bg-slate-800/80' : ''}`}>
+                                        <td className="p-2 text-center border-r border-slate-800 bg-slate-900/30">
+                                            <button onClick={() => toggleSelectRow(r[pk].toString())} className="text-slate-500 hover:text-white">
+                                                {isSelected ? <CheckSquare size={14} className="text-emerald-500"/> : <Square size={14}/>}
+                                            </button>
+                                        </td>
                                         <td className="p-2 text-slate-600 text-xs text-center border-r border-slate-800">{r[pk]?.toString().substring(0,4)}</td>
                                         {orderedColumns.map(c => (
                                             <td key={c.column_name} className="p-2 text-sm text-slate-300 border-r border-slate-800 relative overflow-hidden">

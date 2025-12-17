@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../api';
-import { Folder, FileCode, Play, Plus, ChevronRight, ChevronDown, FolderPlus, FileText, Trash2, Edit2, Save, Search } from 'lucide-react';
+import { Folder, FileCode, Play, Plus, ChevronRight, ChevronDown, FolderPlus, FileText, Trash2, Edit2, Save, Search, Zap, ArrowRight, Eye, EyeOff, Copy } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
 
 interface TreeItem {
@@ -16,30 +16,54 @@ interface TreeItem {
 
 const LogicEditor = () => {
   const { t } = useLanguage();
+  const [activeTab, setActiveTab] = useState<'code' | 'triggers'>('code');
+
+  // CODE EDITOR STATE
   const [tree, setTree] = useState<TreeItem[]>([]);
   const [selectedItem, setSelectedItem] = useState<TreeItem | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [code, setCode] = useState('');
   const [result, setResult] = useState<any>(null);
   const [searchTerm, setSearchTerm] = useState('');
+  const [apiKeys, setApiKeys] = useState({ anon: '', service: '' });
+  const [showKeys, setShowKeys] = useState(false);
+  const [config, setConfig] = useState<any>({});
+  
+  // TRIGGERS STATE
+  const [triggers, setTriggers] = useState<any[]>([]);
+  const [tables, setTables] = useState<any[]>([]);
+  const [funcsList, setFuncsList] = useState<any[]>([]);
+  const [newTrigger, setNewTrigger] = useState({ table: '', event: 'INSERT', timing: 'AFTER', function: '' });
   
   // Modals & Context
-  const [modalType, setModalType] = useState<'createFolder' | 'createItem' | 'rename' | null>(null);
+  const [modalType, setModalType] = useState<'createFolder' | 'createItem' | 'rename' | 'createTrigger' | 'overwrite' | null>(null);
+  const [overwritePayload, setOverwritePayload] = useState<{name: string, schema: string, sql: string} | null>(null);
   const [targetSchema, setTargetSchema] = useState('');
   const [itemName, setItemName] = useState('');
   const [itemType, setItemType] = useState<'function' | 'file'>('function');
   const [contextMenu, setContextMenu] = useState<{x:number, y:number, folder: string} | null>(null);
   const [hoveredFolder, setHoveredFolder] = useState<string | null>(null);
-  // Track last selected schema to implicit context
   const [activeSchema, setActiveSchema] = useState<string | null>(null);
 
-  useEffect(() => { loadTree(); }, []);
+  useEffect(() => { 
+      loadTree(); 
+      loadTriggersData(); 
+      fetchKeys();
+      api.get('/config').then(setConfig).catch(console.error);
+  }, []);
 
   useEffect(() => {
     const close = () => setContextMenu(null);
     window.addEventListener('click', close);
     return () => window.removeEventListener('click', close);
   }, []);
+
+  const fetchKeys = async () => {
+      try {
+          const k = await api.get('/auth/keys');
+          setApiKeys(k);
+      } catch(e) { console.error(e); }
+  }
 
   const loadTree = async () => {
     try {
@@ -49,9 +73,10 @@ const LogicEditor = () => {
             api.get('/files')
         ]);
 
+        // Keep funcs for trigger selector
+        setFuncsList(funcs);
+
         const root: Record<string, TreeItem[]> = {};
-        
-        // Filter out system, 'public' (principal), and 'auth' from root folders
         schemas.forEach((s: any) => {
              if (!['inercia_sys', 'public', 'auth', 'pg_catalog', 'information_schema'].includes(s.name)) {
                  if(!root[s.name]) root[s.name] = [];
@@ -59,7 +84,6 @@ const LogicEditor = () => {
         });
 
         funcs.forEach((f: any) => {
-            // Only add if schema is in our filtered root list
             if (root[f.schema]) {
                 root[f.schema].push({ name: f.name, type: 'function', schema: f.schema, def: f.def, args: f.args });
             }
@@ -80,6 +104,17 @@ const LogicEditor = () => {
     } catch(e) { console.error(e); }
   };
 
+  const loadTriggersData = async () => {
+      try {
+          const [t, tables] = await Promise.all([
+              api.get('/triggers'),
+              api.get('/tables')
+          ]);
+          setTriggers(t);
+          setTables(tables);
+      } catch(e) { console.error(e); }
+  }
+
   const handleSelect = (item: TreeItem) => {
       setSelectedItem(item);
       if (item.type === 'function') setCode(item.def || '');
@@ -89,13 +124,57 @@ const LogicEditor = () => {
 
   const handleSchemaClick = (schemaName: string) => {
       setExpanded({...expanded, [schemaName]: !expanded[schemaName]});
-      setActiveSchema(schemaName); // Set context for execution
+      setActiveSchema(schemaName); 
   };
 
-  const runOrSave = async () => {
-      setResult(null);
+  const extractFunctionName = (sql: string) => {
+      const match = sql.match(/(?:CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+)(?:IF\s+NOT\s+EXISTS\s+)?([a-zA-Z0-9_"\.]+)/i);
+      if (match && match[1]) {
+          const parts = match[1].split('.');
+          const name = parts.length > 1 ? parts[1].replace(/"/g, '') : parts[0].replace(/"/g, '');
+          const schema = parts.length > 1 ? parts[0].replace(/"/g, '') : activeSchema || 'public';
+          return { name, schema };
+      }
+      return null;
+  };
+
+  const executeSave = async (payload?: {name: string, schema: string, sql: string, overwrite?: boolean, version?: boolean}) => {
+      const contextSchema = payload?.schema || selectedItem?.schema || activeSchema; 
+      let sqlToRun = payload?.sql || code;
       
-      // File Save
+      // Handle Versioning
+      if (payload?.version) {
+          // Add suffix to name in SQL
+          let newName = `${payload.name}_1`;
+          let counter = 1;
+          // Simple check if name_1 exists locally would be better, but simplified here:
+          // Just replace the name in the CREATE statement
+          sqlToRun = sqlToRun.replace(new RegExp(payload.name, 'g'), newName); // Basic replace
+      }
+      
+      // Handle Full Overwrite (Delete then Create)
+      if (payload?.overwrite) {
+          try {
+              await api.post('/rpc/drop', { schema: payload.schema, name: payload.name });
+          } catch(e) { console.error("Drop failed, maybe didn't exist", e); }
+      }
+
+      try {
+          const res = await api.post('/sql', { query: sqlToRun, schema: contextSchema });
+          setResult({ status: 'success', data: res });
+          if (res.createdFunction) { 
+              loadTree(); 
+              loadTriggersData(); 
+              setModalType(null);
+          }
+      } catch (e: any) {
+          setResult({ status: 'error', message: e.message });
+      }
+  };
+
+  const checkAndRun = async () => {
+      setResult(null);
+      // File Handling
       if (selectedItem?.type === 'file' && selectedItem.id) {
           try {
               await api.put(`/files/${selectedItem.id}`, { content: code });
@@ -104,61 +183,53 @@ const LogicEditor = () => {
           } catch(e:any) { setResult({ status: 'error', message: "Erro: " + e.message }); }
           return;
       }
-      
-      // SQL Execution with Context
-      try {
-          // Pass activeSchema to backend to set search_path
-          const contextSchema = selectedItem?.schema || activeSchema; 
-          const res = await api.post('/sql', { query: code, schema: contextSchema });
-          setResult({ status: 'success', data: res });
-          if (res.createdFunction) loadTree();
-      } catch (e: any) {
-          setResult({ status: 'error', message: e.message });
+
+      // Function Handling
+      const meta = extractFunctionName(code);
+      if (!meta) {
+          // If simply executing SQL without function definition
+          executeSave();
+          return;
+      }
+
+      // Check if exists
+      const exists = funcsList.find(f => f.name === meta.name && f.schema === meta.schema);
+      if (exists) {
+          setOverwritePayload({ name: meta.name, schema: meta.schema, sql: code });
+          setModalType('overwrite');
+      } else {
+          executeSave();
       }
   };
 
-  const handleCreateFolder = async () => {
-      try { await api.post('/schemas', { name: itemName }); closeModal(); loadTree(); } catch(e:any) { alert(e.message); }
-  }
+  const copyToClipboard = (text: string) => {
+      navigator.clipboard.writeText(text);
+      alert("Copiado!");
+  };
 
-  const handleCreateItem = async () => {
+  // ... Trigger handlers ...
+  const handleCreateTrigger = async () => {
+      if(!newTrigger.table || !newTrigger.function) return alert("Selecione tabela e função.");
+      const tableName = newTrigger.table;
+      const schemaName = tables.find(t => t.table_name === tableName)?.table_schema || 'public';
+      const funcName = newTrigger.function;
+      const triggerName = `trig_${tableName}_${newTrigger.event.toLowerCase()}`;
       try {
-          // No need to prefix with schema manually in SQL, backend will handle search_path if activeSchema is set
-          // But for clarity in the template we can leave it generic
-          const schema = targetSchema; 
-          if (itemType === 'file') {
-               await api.post('/files', { name: itemName, content: '', schema_name: schema, type: 'txt' });
-          } else {
-               // Template without schema prefix, relying on implicit context or user preference
-               const template = `CREATE OR REPLACE FUNCTION ${itemName}() RETURNS void AS $$ \nBEGIN \n  -- Logic here \nEND; \n$$ LANGUAGE plpgsql;`;
-               setCode(template);
-               setActiveSchema(schema); // Ensure context is set
-               setSelectedItem({ name: itemName, type: 'function', schema: schema }); // Temp selection
-          }
-          closeModal();
-          loadTree();
-      } catch(e:any) { alert(e.message); }
+          await api.post('/triggers', { schema: schemaName, table: tableName, name: triggerName, timing: newTrigger.timing, event: newTrigger.event, functionName: funcName });
+          setModalType(null); loadTriggersData();
+      } catch(e: any) { alert(e.message); }
   }
+  const handleDeleteTrigger = async (t: any) => { if(!confirm("Excluir gatilho?")) return; try { await api.delete('/triggers', { schema: t.schema, table: t.table, name: t.trigger_name }); loadTriggersData(); } catch(e:any) { alert(e.message); } }
 
-  const handleDeleteFolder = async () => {
-      if(!contextMenu) return;
-      if(!confirm(`Excluir pasta "${contextMenu.folder}"?`)) return;
-      try { await api.delete(`/schemas/${contextMenu.folder}`); loadTree(); } catch(e:any) { alert(e.message); }
-  }
-
-  const handleRenameFolder = async () => {
-      if(!contextMenu) return;
-      const newName = prompt("Novo nome:", contextMenu.folder);
-      if(newName && newName !== contextMenu.folder) {
-          try { await api.put(`/schemas/${contextMenu.folder}`, { newName }); loadTree(); } catch(e:any) { alert(e.message); }
-      }
-  }
-
+  // ... Folder/Item handlers ...
+  const handleCreateFolder = async () => { try { await api.post('/schemas', { name: itemName }); closeModal(); loadTree(); } catch(e:any) { alert(e.message); } }
+  const handleCreateItem = async () => { try { const schema = targetSchema; if (itemType === 'file') { await api.post('/files', { name: itemName, content: '', schema_name: schema, type: 'txt' }); } else { const template = `CREATE OR REPLACE FUNCTION ${itemName}() RETURNS TRIGGER AS $$ \nBEGIN \n  -- Logic here\n  RETURN NEW; \nEND; \n$$ LANGUAGE plpgsql;`; setCode(template); setActiveSchema(schema); setSelectedItem({ name: itemName, type: 'function', schema: schema }); } closeModal(); loadTree(); } catch(e:any) { alert(e.message); } }
+  const handleDeleteFolder = async () => { if(!contextMenu) return; if(!confirm(`Excluir pasta "${contextMenu.folder}"?`)) return; try { await api.delete(`/schemas/${contextMenu.folder}`); loadTree(); } catch(e:any) { alert(e.message); } }
+  const handleRenameFolder = async () => { if(!contextMenu) return; const newName = prompt("Novo nome:", contextMenu.folder); if(newName && newName !== contextMenu.folder) { try { await api.put(`/schemas/${contextMenu.folder}`, { newName }); loadTree(); } catch(e:any) { alert(e.message); } } }
   const openCreateItemModal = (schema: string) => { setTargetSchema(schema); setModalType('createItem'); setItemName(''); }
   const onContextMenu = (e: React.MouseEvent, folder: string) => { e.preventDefault(); setContextMenu({ x: e.clientX, y: e.clientY, folder }); }
   const closeModal = () => { setModalType(null); setItemName(''); }
 
-  // Search Logic
   const filteredTree = tree.filter(node => {
       if (!searchTerm) return true;
       const matchName = node.name.toLowerCase().includes(searchTerm.toLowerCase());
@@ -166,123 +237,286 @@ const LogicEditor = () => {
       return matchName || matchChildren;
   }).map(node => {
       if (!searchTerm) return node;
-      // If searching, filter children too
-      return {
-          ...node,
-          children: node.children?.filter(c => c.name.toLowerCase().includes(searchTerm.toLowerCase()))
-      };
+      return { ...node, children: node.children?.filter(c => c.name.toLowerCase().includes(searchTerm.toLowerCase())) };
   });
 
   return (
-    <div className="flex h-full gap-4">
-        {/* Modals ... */}
-        {modalType === 'createFolder' && (
-            <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
-                <div className="bg-slate-800 p-6 rounded border border-slate-600 w-80">
-                    <h3 className="text-white font-bold mb-4">Nova Pasta</h3>
-                    <input className="w-full bg-slate-900 border border-slate-700 text-white p-2 rounded mb-4" placeholder="Nome..." value={itemName} onChange={e => setItemName(e.target.value)} />
-                    <div className="flex justify-end gap-2"><button onClick={closeModal} className="text-slate-400">Cancelar</button><button onClick={handleCreateFolder} className="bg-emerald-600 text-white px-4 py-2 rounded">Criar</button></div>
-                </div>
-            </div>
-        )}
-        {modalType === 'createItem' && (
-             <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
-                <div className="bg-slate-800 p-6 rounded border border-slate-600 w-96">
-                    <h3 className="text-white font-bold mb-4">Novo Item em "{targetSchema}"</h3>
-                    <div className="flex gap-2 mb-4">
-                        <button onClick={() => setItemType('function')} className={`flex-1 py-2 rounded text-sm ${itemType === 'function' ? 'bg-emerald-600 text-white' : 'bg-slate-700 text-slate-300'}`}>Função SQL</button>
-                        <button onClick={() => setItemType('file')} className={`flex-1 py-2 rounded text-sm ${itemType === 'file' ? 'bg-emerald-600 text-white' : 'bg-slate-700 text-slate-300'}`}>Arquivo TXT</button>
-                    </div>
-                    <input className="w-full bg-slate-900 border border-slate-700 text-white p-2 rounded mb-4" placeholder="Nome..." value={itemName} onChange={e => setItemName(e.target.value)} />
-                    <div className="flex justify-end gap-2"><button onClick={closeModal} className="text-slate-400">Cancelar</button><button onClick={handleCreateItem} className="bg-emerald-600 text-white px-4 py-2 rounded">Criar</button></div>
-                </div>
-            </div>
-        )}
-        {contextMenu && (
-            <div className="fixed bg-slate-800 border border-slate-600 rounded shadow-xl py-1 z-[60] w-40" style={{ top: contextMenu.y, left: contextMenu.x }} onClick={(e) => e.stopPropagation()}>
-                <button onClick={handleRenameFolder} className="w-full text-left px-4 py-2 text-sm text-slate-300 hover:bg-slate-700 flex items-center gap-2"><Edit2 size={14}/> Renomear</button>
-                <button onClick={handleDeleteFolder} className="w-full text-left px-4 py-2 text-sm text-red-400 hover:bg-slate-700 flex items-center gap-2"><Trash2 size={14}/> Excluir</button>
-            </div>
-        )}
+    <div className="flex flex-col h-full gap-4">
+        {/* TOP TABS */}
+        <div className="flex gap-4 border-b border-slate-700 pb-2">
+            <button onClick={() => setActiveTab('code')} className={`flex items-center gap-2 px-4 py-2 rounded font-bold text-sm ${activeTab === 'code' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-800'}`}><FileCode size={16} /> Code Editor</button>
+            <button onClick={() => setActiveTab('triggers')} className={`flex items-center gap-2 px-4 py-2 rounded font-bold text-sm ${activeTab === 'triggers' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-800'}`}><Zap size={16} /> Database Triggers</button>
+        </div>
 
-        {/* Sidebar */}
-        <div className="w-64 bg-slate-800 rounded border border-slate-700 flex flex-col">
-            <div className="p-3 bg-slate-900 border-b border-slate-700 space-y-2">
-                <div className="flex justify-between items-center">
-                    <span className="text-xs font-bold text-slate-400 uppercase">{t.logic.explorer}</span>
-                    <button onClick={() => { setModalType('createFolder'); setItemName(''); }} className="text-emerald-400 hover:text-white bg-slate-800 p-1 rounded border border-slate-700 hover:bg-slate-700" title="Nova Pasta"><FolderPlus size={16}/></button>
-                </div>
-                <div className="relative">
-                    <Search size={12} className="absolute left-2 top-2 text-slate-500"/>
-                    <input 
-                        className="w-full bg-slate-950 border border-slate-700 rounded py-1 pl-7 pr-2 text-xs text-white focus:outline-none focus:border-emerald-500" 
-                        placeholder="Buscar função..." 
-                        value={searchTerm} 
-                        onChange={e => setSearchTerm(e.target.value)}
-                    />
-                </div>
-            </div>
-            <div className="flex-1 overflow-y-auto p-2">
-                {filteredTree.map(schema => (
-                    <div key={schema.name} className="mb-1">
-                        <div 
-                            className={`flex items-center justify-between text-slate-300 hover:bg-slate-700 px-2 py-1 rounded cursor-pointer group ${activeSchema === schema.name ? 'bg-slate-700/50' : ''}`}
-                            onClick={() => handleSchemaClick(schema.name)}
-                            onMouseEnter={() => setHoveredFolder(schema.name)}
-                            onMouseLeave={() => setHoveredFolder(null)}
-                            onContextMenu={(e) => onContextMenu(e, schema.name)}
-                        >
-                            <div className="flex items-center gap-1 overflow-hidden">
-                                {expanded[schema.name] || searchTerm ? <ChevronDown size={14}/> : <ChevronRight size={14}/>}
-                                <Folder size={14} className="text-blue-400" />
-                                <span className="text-sm font-bold capitalize truncate">{schema.name}</span>
-                            </div>
-                            <button onClick={(e) => { e.stopPropagation(); openCreateItemModal(schema.name); }} className={`p-0.5 rounded hover:bg-emerald-600 hover:text-white transition-opacity ${hoveredFolder === schema.name ? 'opacity-100' : 'opacity-0'}`} title="Add Item"><Plus size={14} /></button>
+        {/* --- CODE EDITOR VIEW --- */}
+        {activeTab === 'code' && (
+            <div className="flex flex-1 gap-4 overflow-hidden">
+                {/* Modals */}
+                {modalType === 'createFolder' && (
+                    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+                        <div className="bg-slate-800 p-6 rounded border border-slate-600 w-80">
+                            <h3 className="text-white font-bold mb-4">Nova Pasta</h3>
+                            <input className="w-full bg-slate-900 border border-slate-700 text-white p-2 rounded mb-4" placeholder="Nome..." value={itemName} onChange={e => setItemName(e.target.value)} />
+                            <div className="flex justify-end gap-2"><button onClick={closeModal} className="text-slate-400">Cancelar</button><button onClick={handleCreateFolder} className="bg-emerald-600 text-white px-4 py-2 rounded">Criar</button></div>
                         </div>
-                        {(expanded[schema.name] || searchTerm) && (
-                            <div className="ml-4 border-l border-slate-700 pl-2 mt-1 space-y-0.5">
-                                {schema.children?.map((item, i) => (
-                                    <div key={i} className={`flex items-center gap-2 px-2 py-1 rounded cursor-pointer text-sm ${selectedItem === item ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-700/50'}`} onClick={() => handleSelect(item)}>
-                                        {item.type === 'function' ? <FileCode size={14} className="flex-shrink-0" /> : <FileText size={14} className="flex-shrink-0" />}
-                                        <span className="truncate">{item.name}</span>
+                    </div>
+                )}
+                {modalType === 'createItem' && (
+                    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+                        <div className="bg-slate-800 p-6 rounded border border-slate-600 w-96">
+                            <h3 className="text-white font-bold mb-4">Novo Item em "{targetSchema}"</h3>
+                            <div className="flex gap-2 mb-4">
+                                <button onClick={() => setItemType('function')} className={`flex-1 py-2 rounded text-sm ${itemType === 'function' ? 'bg-emerald-600 text-white' : 'bg-slate-700 text-slate-300'}`}>Função SQL</button>
+                                <button onClick={() => setItemType('file')} className={`flex-1 py-2 rounded text-sm ${itemType === 'file' ? 'bg-emerald-600 text-white' : 'bg-slate-700 text-slate-300'}`}>Arquivo TXT</button>
+                            </div>
+                            <input className="w-full bg-slate-900 border border-slate-700 text-white p-2 rounded mb-4" placeholder="Nome..." value={itemName} onChange={e => setItemName(e.target.value)} />
+                            <div className="flex justify-end gap-2"><button onClick={closeModal} className="text-slate-400">Cancelar</button><button onClick={handleCreateItem} className="bg-emerald-600 text-white px-4 py-2 rounded">Criar</button></div>
+                        </div>
+                    </div>
+                )}
+                {modalType === 'overwrite' && overwritePayload && (
+                    <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+                        <div className="bg-slate-900 border border-slate-700 rounded-lg p-6 max-w-md w-full shadow-2xl">
+                            <h3 className="text-xl font-bold text-white mb-2">Função Existente</h3>
+                            <p className="text-slate-400 text-sm mb-6">
+                                A função <b>"{overwritePayload.name}"</b> já existe neste schema. O que deseja fazer?
+                            </p>
+                            <div className="flex flex-col gap-3">
+                                <button onClick={() => executeSave({ ...overwritePayload, overwrite: true })} className="bg-red-600/20 border border-red-500 hover:bg-red-600 text-white px-4 py-3 rounded font-bold text-left transition-colors">
+                                    <div className="text-sm">Substituir Completamente</div>
+                                    <div className="text-[10px] font-normal text-slate-300 opacity-80">Apaga a antiga e cria a nova (Limpa vestígios).</div>
+                                </button>
+                                <button onClick={() => executeSave({ ...overwritePayload, version: true })} className="bg-blue-600/20 border border-blue-500 hover:bg-blue-600 text-white px-4 py-3 rounded font-bold text-left transition-colors">
+                                    <div className="text-sm">Criar Nova Versão</div>
+                                    <div className="text-[10px] font-normal text-slate-300 opacity-80">Salva como <b>{overwritePayload.name}_1</b> para preservar a atual.</div>
+                                </button>
+                                <button onClick={() => setModalType(null)} className="text-slate-500 text-sm mt-2 text-center hover:text-white">Cancelar</button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+                {contextMenu && (
+                    <div className="fixed bg-slate-800 border border-slate-600 rounded shadow-xl py-1 z-[60] w-40" style={{ top: contextMenu.y, left: contextMenu.x }} onClick={(e) => e.stopPropagation()}>
+                        <button onClick={handleRenameFolder} className="w-full text-left px-4 py-2 text-sm text-slate-300 hover:bg-slate-700 flex items-center gap-2"><Edit2 size={14}/> Renomear</button>
+                        <button onClick={handleDeleteFolder} className="w-full text-left px-4 py-2 text-sm text-red-400 hover:bg-slate-700 flex items-center gap-2"><Trash2 size={14}/> Excluir</button>
+                    </div>
+                )}
+
+                {/* Tree View */}
+                <div className="w-60 flex-shrink-0 bg-slate-800 rounded border border-slate-700 flex flex-col">
+                    <div className="p-3 bg-slate-900 border-b border-slate-700 space-y-2">
+                        <div className="flex justify-between items-center">
+                            <span className="text-xs font-bold text-slate-400 uppercase">{t.logic.explorer}</span>
+                            <button onClick={() => { setModalType('createFolder'); setItemName(''); }} className="text-emerald-400 hover:text-white bg-slate-800 p-1 rounded border border-slate-700 hover:bg-slate-700" title="Nova Pasta"><FolderPlus size={16}/></button>
+                        </div>
+                        <div className="relative">
+                            <Search size={12} className="absolute left-2 top-2 text-slate-500"/>
+                            <input className="w-full bg-slate-950 border border-slate-700 rounded py-1 pl-7 pr-2 text-xs text-white focus:outline-none focus:border-emerald-500" placeholder="Buscar função..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
+                        </div>
+                    </div>
+                    <div className="flex-1 overflow-y-auto p-2">
+                        {filteredTree.map(schema => (
+                            <div key={schema.name} className="mb-1">
+                                <div className={`flex items-center justify-between text-slate-300 hover:bg-slate-700 px-2 py-1 rounded cursor-pointer group ${activeSchema === schema.name ? 'bg-slate-700/50' : ''}`} onClick={() => handleSchemaClick(schema.name)} onMouseEnter={() => setHoveredFolder(schema.name)} onMouseLeave={() => setHoveredFolder(null)} onContextMenu={(e) => onContextMenu(e, schema.name)}>
+                                    <div className="flex items-center gap-1 overflow-hidden">
+                                        {expanded[schema.name] || searchTerm ? <ChevronDown size={14}/> : <ChevronRight size={14}/>}
+                                        <Folder size={14} className="text-blue-400" />
+                                        <span className="text-sm font-bold capitalize truncate">{schema.name}</span>
                                     </div>
-                                ))}
-                                {(!schema.children || schema.children.length === 0) && <div className="text-[10px] text-slate-600 pl-2 italic">Vazio</div>}
+                                    <button onClick={(e) => { e.stopPropagation(); openCreateItemModal(schema.name); }} className={`p-0.5 rounded hover:bg-emerald-600 hover:text-white transition-opacity ${hoveredFolder === schema.name ? 'opacity-100' : 'opacity-0'}`} title="Add Item"><Plus size={14} /></button>
+                                </div>
+                                {(expanded[schema.name] || searchTerm) && (
+                                    <div className="ml-4 border-l border-slate-700 pl-2 mt-1 space-y-0.5">
+                                        {schema.children?.map((item, i) => (
+                                            <div key={i} className={`flex items-center gap-2 px-2 py-1 rounded cursor-pointer text-sm ${selectedItem === item ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-700/50'}`} onClick={() => handleSelect(item)}>
+                                                {item.type === 'function' ? <FileCode size={14} className="flex-shrink-0" /> : <FileText size={14} className="flex-shrink-0" />}
+                                                <span className="truncate">{item.name}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                </div>
+
+                {/* Editor Area */}
+                <div className="flex-1 flex flex-col gap-4">
+                    <div className="flex-1 bg-slate-950 border border-slate-700 rounded overflow-hidden flex flex-col">
+                        <div className="bg-slate-900 p-2 border-b border-slate-700 flex justify-between items-center">
+                            <span className="text-xs text-slate-400 font-mono">
+                                {selectedItem ? `${selectedItem.schema}/${selectedItem.name}` : (activeSchema ? `Contexto: ${activeSchema}` : 'Selecione uma pasta')}
+                            </span>
+                            <button onClick={checkAndRun} className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1 rounded text-xs font-bold">
+                                {selectedItem?.type === 'file' ? <Save size={12} /> : <Play size={12} />} 
+                                {selectedItem?.type === 'file' ? ' Salvar Arquivo' : ' Executar / Salvar'}
+                            </button>
+                        </div>
+                        <textarea 
+                            className="flex-1 bg-transparent p-4 text-emerald-300 font-mono text-sm focus:outline-none resize-none"
+                            value={code}
+                            onChange={e => setCode(e.target.value)}
+                            spellCheck="false"
+                            placeholder="-- Escreva SQL aqui. O código será executado no contexto da pasta selecionada."
+                        />
+                    </div>
+                    {result && (
+                        <div className="h-40 bg-slate-800 border border-slate-700 rounded flex flex-col overflow-hidden">
+                            <div className="bg-slate-900 p-2 border-b border-slate-700 text-xs font-bold text-slate-400">Resultados</div>
+                            <div className="flex-1 p-4 overflow-auto font-mono text-xs text-slate-300">
+                                {result.status === 'error' ? <span className="text-red-400">{result.message}</span> : JSON.stringify(result.data, null, 2)}
+                            </div>
+                        </div>
+                    )}
+                </div>
+
+                {/* RIGHT PANEL: Tester & Details */}
+                <div className="w-80 flex-shrink-0 bg-slate-800 rounded border border-slate-700 flex flex-col overflow-hidden">
+                    <div className="p-3 bg-slate-900 border-b border-slate-700 font-bold text-white text-sm">
+                        Detalhes da Função
+                    </div>
+                    <div className="flex-1 overflow-y-auto p-4 space-y-6">
+                        {selectedItem ? (
+                            <>
+                                <div>
+                                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Conexão API (cURL)</label>
+                                    <div className="bg-black/50 border border-slate-700 rounded p-3 relative group">
+                                        <div className="absolute top-2 right-2 flex gap-1">
+                                            <button onClick={() => setShowKeys(!showKeys)} className="p-1 text-slate-400 hover:text-white bg-slate-800 rounded">{showKeys ? <EyeOff size={12}/> : <Eye size={12}/>}</button>
+                                            <button onClick={() => copyToClipboard(`curl -X POST ${config.apiExternalUrl}/api/rpc/${selectedItem.name} -H "Authorization: Bearer ${apiKeys.anon}" -H "apikey: ${apiKeys.anon}" -d '{}'`)} className="p-1 text-slate-400 hover:text-white bg-slate-800 rounded"><Copy size={12}/></button>
+                                        </div>
+                                        <code className="text-[10px] text-green-400 font-mono break-all whitespace-pre-wrap">
+                                            curl -X POST {config.apiExternalUrl || '...'}/api/rpc/<span className="text-yellow-400 font-bold">{selectedItem.name}</span> \<br/>
+                                            -H "Authorization: Bearer <span className="text-blue-400">{showKeys ? apiKeys.anon : 'ANON_KEY'}</span>" \<br/>
+                                            -H "apikey: <span className="text-blue-400">{showKeys ? apiKeys.anon : 'ANON_KEY'}</span>" \<br/>
+                                            -H "Content-Type: application/json" \<br/>
+                                            -d '{`{}`}'
+                                        </code>
+                                    </div>
+                                    <p className="text-[10px] text-slate-500 mt-2">
+                                        A <b>Anon Key</b> é segura para usar em sites públicos (frontend). Use a <b>Service Key</b> apenas no servidor.
+                                    </p>
+                                </div>
+                                
+                                {selectedItem.args && (
+                                    <div>
+                                        <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Argumentos Esperados</label>
+                                        <div className="text-xs font-mono text-slate-300 bg-slate-900 p-2 rounded border border-slate-700">
+                                            {selectedItem.args}
+                                        </div>
+                                    </div>
+                                )}
+                            </>
+                        ) : (
+                            <div className="text-center text-slate-500 mt-10">
+                                <Zap size={32} className="mx-auto mb-2 opacity-30"/>
+                                <p className="text-xs">Selecione uma função para ver detalhes de conexão e teste.</p>
                             </div>
                         )}
                     </div>
-                ))}
+                </div>
             </div>
-        </div>
+        )}
 
-        <div className="flex-1 flex flex-col gap-4">
-             <div className="flex-1 bg-slate-950 border border-slate-700 rounded overflow-hidden flex flex-col">
-                <div className="bg-slate-900 p-2 border-b border-slate-700 flex justify-between items-center">
-                     <span className="text-xs text-slate-400 font-mono">
-                         {selectedItem ? `${selectedItem.schema}/${selectedItem.name}` : (activeSchema ? `Contexto: ${activeSchema}` : 'Selecione uma pasta')}
-                     </span>
-                     <button onClick={runOrSave} className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1 rounded text-xs font-bold">
-                         {selectedItem?.type === 'file' ? <Save size={12} /> : <Play size={12} />} 
-                         {selectedItem?.type === 'file' ? ' Salvar Arquivo' : ' Executar / Salvar'}
-                     </button>
-                </div>
-                <textarea 
-                    className="flex-1 bg-transparent p-4 text-emerald-300 font-mono text-sm focus:outline-none resize-none"
-                    value={code}
-                    onChange={e => setCode(e.target.value)}
-                    spellCheck="false"
-                    placeholder="-- Escreva SQL aqui. O código será executado no contexto da pasta selecionada."
-                />
-            </div>
-            {result && (
-                <div className="h-40 bg-slate-800 border border-slate-700 rounded flex flex-col overflow-hidden">
-                    <div className="bg-slate-900 p-2 border-b border-slate-700 text-xs font-bold text-slate-400">Resultados</div>
-                    <div className="flex-1 p-4 overflow-auto font-mono text-xs text-slate-300">
-                        {result.status === 'error' ? <span className="text-red-400">{result.message}</span> : JSON.stringify(result.data, null, 2)}
+        {/* --- TRIGGERS VIEW --- */}
+        {activeTab === 'triggers' && (
+            <div className="flex-1 bg-slate-800 rounded border border-slate-700 flex flex-col overflow-hidden animate-fade-in">
+                 {/* Trigger Creation Modal */}
+                 {modalType === 'createTrigger' && (
+                    <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+                        <div className="bg-slate-900 border border-slate-700 rounded-lg p-6 max-w-lg w-full">
+                            <h3 className="text-xl font-bold text-white mb-6 flex items-center gap-2"><Zap className="text-yellow-500"/> Novo Gatilho (Trigger)</h3>
+                            
+                            <div className="grid grid-cols-2 gap-4 mb-4">
+                                <div>
+                                    <label className="block text-slate-400 text-xs mb-1">Quando (Timing)</label>
+                                    <select className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-white" value={newTrigger.timing} onChange={e => setNewTrigger({...newTrigger, timing: e.target.value})}>
+                                        <option value="BEFORE">BEFORE (Antes)</option>
+                                        <option value="AFTER">AFTER (Depois)</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="block text-slate-400 text-xs mb-1">Evento</label>
+                                    <select className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-white" value={newTrigger.event} onChange={e => setNewTrigger({...newTrigger, event: e.target.value})}>
+                                        <option value="INSERT">INSERT (Criar)</option>
+                                        <option value="UPDATE">UPDATE (Editar)</option>
+                                        <option value="DELETE">DELETE (Excluir)</option>
+                                    </select>
+                                </div>
+                            </div>
+                            
+                            <div className="mb-4">
+                                <label className="block text-slate-400 text-xs mb-1">Na Tabela</label>
+                                <select className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-white" value={newTrigger.table} onChange={e => setNewTrigger({...newTrigger, table: e.target.value})}>
+                                    <option value="">Selecione...</option>
+                                    {tables.map(t => <option key={t.table_name} value={t.table_name}>{t.table_name}</option>)}
+                                </select>
+                            </div>
+
+                            <div className="mb-6">
+                                <label className="block text-slate-400 text-xs mb-1">Executar Função</label>
+                                <select className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-white" value={newTrigger.function} onChange={e => setNewTrigger({...newTrigger, function: e.target.value})}>
+                                    <option value="">Selecione...</option>
+                                    {funcsList.filter(f => f.def.includes('RETURNS trigger') || f.def.includes('RETURNS TRIGGER')).map(f => (
+                                        <option key={f.name} value={f.name}>{f.schema}.{f.name}</option>
+                                    ))}
+                                </select>
+                                <p className="text-[10px] text-slate-500 mt-1">Apenas funções que retornam <code>TRIGGER</code> aparecem aqui.</p>
+                            </div>
+
+                            <div className="flex justify-end gap-2">
+                                <button onClick={() => setModalType(null)} className="text-slate-400">Cancelar</button>
+                                <button onClick={handleCreateTrigger} className="bg-emerald-600 text-white px-4 py-2 rounded font-bold">Criar Gatilho</button>
+                            </div>
+                        </div>
                     </div>
+                )}
+
+                <div className="p-6 border-b border-slate-700 flex justify-between items-center bg-slate-900">
+                    <div>
+                        <h2 className="text-xl font-bold text-white mb-1">Automação de Banco de Dados</h2>
+                        <p className="text-sm text-slate-400">Conecte eventos (Insert/Update/Delete) a suas funções lógicas.</p>
+                    </div>
+                    <button onClick={() => { setNewTrigger({table:'', event:'INSERT', timing:'AFTER', function:''}); setModalType('createTrigger'); }} className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded flex items-center gap-2 font-bold shadow-lg">
+                        <Plus size={18}/> Novo Gatilho
+                    </button>
                 </div>
-            )}
-        </div>
+                
+                <div className="flex-1 overflow-y-auto p-6">
+                    {triggers.length === 0 ? (
+                        <div className="text-center text-slate-500 py-20 border-2 border-dashed border-slate-700 rounded">
+                            <Zap size={48} className="mx-auto mb-4 opacity-20"/>
+                            <p>Nenhum gatilho ativo.</p>
+                        </div>
+                    ) : (
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                            {triggers.map((t, i) => (
+                                <div key={i} className="bg-slate-900 border border-slate-700 rounded p-4 group hover:border-emerald-500/50 transition-all">
+                                    <div className="flex justify-between items-start mb-2">
+                                        <div className="flex items-center gap-2">
+                                            <Zap size={16} className="text-yellow-500"/>
+                                            <span className="text-white font-bold text-sm truncate w-40" title={t.trigger_name}>{t.trigger_name}</span>
+                                        </div>
+                                        <button onClick={() => handleDeleteTrigger(t)} className="text-slate-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 size={16}/></button>
+                                    </div>
+                                    
+                                    <div className="flex items-center gap-2 text-xs text-slate-400 mb-3 font-mono bg-slate-950 p-2 rounded">
+                                        <span className="text-purple-400">{t.action_timing}</span>
+                                        <span className="text-emerald-400">{t.event}</span>
+                                        <span>ON</span>
+                                        <span className="text-white font-bold">{t.table}</span>
+                                    </div>
+
+                                    <div className="flex items-center gap-2 text-xs text-slate-500">
+                                        <ArrowRight size={12}/> Executa: <span className="text-blue-400 font-mono">{t.action_statement.replace('EXECUTE FUNCTION ', '')}</span>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            </div>
+        )}
     </div>
   );
 };
