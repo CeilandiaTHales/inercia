@@ -3,11 +3,9 @@ import { HashRouter, Routes, Route, Navigate, useLocation } from 'react-router-d
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import TableEditor from './pages/TableEditor';
-import TableBuilder from './pages/TableBuilder';
-import SqlEditor from './pages/SqlEditor';
+import LogicEditor from './pages/LogicEditor';
 import AuthManager from './pages/AuthManager';
 import Extensions from './pages/Extensions';
-import RpcManager from './pages/RpcManager';
 import Sidebar from './components/Sidebar';
 
 // Simple layout wrapper
@@ -16,7 +14,7 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     <div className="flex h-screen bg-slate-950">
       <Sidebar />
       <main className="flex-1 overflow-auto bg-slate-900 p-8">
-        <div className="max-w-7xl mx-auto">
+        <div className="max-w-7xl mx-auto h-full flex flex-col">
           {children}
         </div>
       </main>
@@ -53,9 +51,7 @@ function App() {
         <Route path="/auth/callback" element={<AuthCallback />} />
         <Route path="/" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
         <Route path="/tables" element={<ProtectedRoute><TableEditor /></ProtectedRoute>} />
-        <Route path="/tables/new" element={<ProtectedRoute><TableBuilder /></ProtectedRoute>} />
-        <Route path="/sql" element={<ProtectedRoute><SqlEditor /></ProtectedRoute>} />
-        <Route path="/rpc" element={<ProtectedRoute><RpcManager /></ProtectedRoute>} />
+        <Route path="/logic" element={<ProtectedRoute><LogicEditor /></ProtectedRoute>} />
         <Route path="/extensions" element={<ProtectedRoute><Extensions /></ProtectedRoute>} />
         <Route path="/auth" element={<ProtectedRoute><AuthManager /></ProtectedRoute>} />
       </Routes>

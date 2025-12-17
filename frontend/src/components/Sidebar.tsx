@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Table, Database, Shield, LogOut, Terminal, PlusSquare, Blocks, Zap, Globe } from 'lucide-react';
+import { LayoutDashboard, Table, Shield, LogOut, Terminal, Blocks, Wand2, Globe } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
 
 const Sidebar = () => {
@@ -40,24 +40,12 @@ const Sidebar = () => {
             <Table size={20} />
             <span className="font-medium">{t.sidebar.browser}</span>
           </Link>
-          <Link to="/tables/new" className={`flex items-center gap-3 px-4 py-3 rounded-l-md transition-colors ${isActive('/tables/new')}`}>
-            <PlusSquare size={20} />
-            <span className="font-medium">{t.sidebar.builder}</span>
-          </Link>
-          <Link to="/extensions" className={`flex items-center gap-3 px-4 py-3 rounded-l-md transition-colors ${isActive('/extensions')}`}>
-            <Blocks size={20} />
-            <span className="font-medium">{t.sidebar.extensions}</span>
-          </Link>
 
           <div className="pt-4 pb-2 px-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">{t.sidebar.logic}</div>
 
-          <Link to="/sql" className={`flex items-center gap-3 px-4 py-3 rounded-l-md transition-colors ${isActive('/sql')}`}>
-            <Database size={20} />
-            <span className="font-medium">{t.sidebar.sql}</span>
-          </Link>
-           <Link to="/rpc" className={`flex items-center gap-3 px-4 py-3 rounded-l-md transition-colors ${isActive('/rpc')}`}>
-            <Zap size={20} />
-            <span className="font-medium">{t.sidebar.rpc}</span>
+          <Link to="/logic" className={`flex items-center gap-3 px-4 py-3 rounded-l-md transition-colors ${isActive('/logic')}`}>
+            <Wand2 size={20} />
+            <span className="font-medium">{t.sidebar.logic}</span>
           </Link>
           <Link to="/auth" className={`flex items-center gap-3 px-4 py-3 rounded-l-md transition-colors ${isActive('/auth')}`}>
             <Shield size={20} />
@@ -65,12 +53,16 @@ const Sidebar = () => {
           </Link>
         </nav>
       </div>
-      <div className="mt-auto p-6 border-t border-slate-800 space-y-4">
-        <button onClick={toggleLang} className="flex items-center gap-3 text-slate-400 hover:text-white transition-colors w-full">
+      <div className="mt-auto p-6 border-t border-slate-800 space-y-2">
+        <Link to="/extensions" className={`flex items-center gap-3 px-4 py-3 rounded-l-md transition-colors ${isActive('/extensions')}`}>
+            <Blocks size={20} />
+            <span className="font-medium">{t.sidebar.extensions}</span>
+        </Link>
+        <button onClick={toggleLang} className="flex items-center gap-3 px-4 py-3 text-slate-400 hover:text-white transition-colors w-full rounded-md hover:bg-slate-900">
             <Globe size={20} />
             <span>{language === 'pt' ? 'Português' : 'English'}</span>
         </button>
-        <button onClick={handleLogout} className="flex items-center gap-3 text-slate-400 hover:text-red-400 transition-colors w-full">
+        <button onClick={handleLogout} className="flex items-center gap-3 px-4 py-3 text-slate-400 hover:text-red-400 transition-colors w-full rounded-md hover:bg-slate-900">
             <LogOut size={20} />
             <span>{t.sidebar.signout}</span>
         </button>
