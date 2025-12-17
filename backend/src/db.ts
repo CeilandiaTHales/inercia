@@ -4,21 +4,27 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 console.log(`Initializing DB connection pool...`);
+console.log(`Timezone: ${process.env.TZ || 'UTC'}`);
+
+const poolSize = parseInt(process.env.POOLER_DEFAULT_POOL_SIZE || '20', 10);
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  max: 20, // Maximum number of clients in the pool
+  max: poolSize, // Optimized for server capacity
   idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000,
+  connectionTimeoutMillis: 5000, // Increased for stability
 });
 
-pool.on('connect', () => {
-  // Optional: console.log('New client connected to database');
+pool.on('connect', (client) => {
+  // Ensure the connection uses the correct timezone
+  if (process.env.TZ) {
+      client.query(`SET timezone TO '${process.env.TZ}'`).catch(console.error);
+  }
 });
 
 pool.on('error', (err) => {
   console.error('Unexpected error on idle client', err);
-  process.exit(-1); // Critical failure if DB connection is lost
+  // Do not exit process immediately in production, try to recover or let container orchestrator restart
 });
 
 export default pool;

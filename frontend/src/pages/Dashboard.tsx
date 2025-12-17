@@ -8,14 +8,26 @@ const Dashboard = () => {
   const [stats, setStats] = useState<any>({});
   const [showConnect, setShowConnect] = useState(false);
   const [config, setConfig] = useState<any>({});
+  // Real History for Chart
+  const [tpsHistory, setTpsHistory] = useState<number[]>(new Array(30).fill(0));
 
   useEffect(() => {
     api.get('/config').then(setConfig).catch(console.error);
+    
     const fetchStats = () => {
-        api.get('/stats').then(setStats).catch(console.error);
+        api.get('/stats').then(newStats => {
+            setStats(newStats);
+            // Update History Real Data
+            setTpsHistory(prev => {
+                const currentLoad = parseInt(newStats.active_queries || '0') + (parseInt(newStats.active_connections || '0') / 5);
+                const newHistory = [...prev.slice(1), currentLoad];
+                return newHistory;
+            });
+        }).catch(console.error);
     };
+    
     fetchStats();
-    const interval = setInterval(fetchStats, 10000); // Live update
+    const interval = setInterval(fetchStats, 5000); // Faster update for chart feeling
     return () => clearInterval(interval);
   }, []);
 
@@ -32,7 +44,8 @@ const Dashboard = () => {
                       <pre className="text-sm text-slate-300 font-mono overflow-x-auto whitespace-pre-wrap">
 {`import { createClient } from '@inercia/sdk';
 
-const inercia = createClient('${config.apiExternalUrl}', 'YOUR_API_KEY');
+// Using real endpoint from config
+const inercia = createClient('${config.apiExternalUrl || 'loading...'}', 'YOUR_API_KEY');
 
 // Get data from table 'products'
 const { data, error } = await inercia
@@ -43,7 +56,7 @@ const { data, error } = await inercia
                   <div className="bg-black/50 p-4 rounded-lg border border-slate-800">
                       <p className="text-blue-400 text-xs font-bold uppercase mb-2 tracking-wider">cURL / REST API</p>
                       <pre className="text-sm text-slate-300 font-mono overflow-x-auto whitespace-pre-wrap">
-{`curl -X GET '${config.apiExternalUrl}/api/tables/public/products/data' \\
+{`curl -X GET '${config.apiExternalUrl || 'loading...'}/api/tables/public/products/data' \\
   -H 'Authorization: Bearer YOUR_TOKEN' \\
   -H 'apikey: YOUR_API_KEY'`}
                       </pre>
@@ -120,15 +133,21 @@ const { data, error } = await inercia
       {/* Real Charts */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="bg-slate-800 rounded-xl border border-slate-700 p-6">
-            <h3 className="text-lg font-bold text-white mb-6">Transações por Segundo (TPS)</h3>
-            <div className="h-64 flex items-end gap-1">
-                {/* Simulated visualizer for queries based on active_queries stat */}
-                {Array.from({length: 30}).map((_, i) => {
-                    // Create some variance based on real active_queries to make it look alive
-                    const base = parseInt(stats.active_queries || '1') * 10;
-                    const height = Math.min(100, Math.max(5, base + (Math.random() * 40 - 20)));
+            <h3 className="text-lg font-bold text-white mb-6">Carga do Banco (Histórico 2.5 min)</h3>
+            <div className="h-64 flex items-end gap-1 border-b border-slate-700 pb-1">
+                {tpsHistory.map((val, i) => {
+                    // Normalize height (assuming max reasonable load for graph is 50 for visualization)
+                    const height = Math.min(100, Math.max(5, val * 4)); 
                     return (
-                        <div key={i} className="flex-1 bg-emerald-500/80 rounded-t hover:bg-emerald-400 transition-all duration-500" style={{ height: `${height}%` }}></div>
+                        <div 
+                            key={i} 
+                            className="flex-1 bg-emerald-500/80 rounded-t hover:bg-emerald-400 transition-all duration-500 relative group" 
+                            style={{ height: `${height}%` }}
+                        >
+                             <div className="absolute bottom-full mb-1 left-1/2 -translate-x-1/2 bg-black text-xs px-1 rounded opacity-0 group-hover:opacity-100 transition-opacity">
+                                 {val}
+                             </div>
+                        </div>
                     )
                 })}
             </div>
@@ -139,11 +158,11 @@ const { data, error } = await inercia
              <div className="relative w-48 h-48 mt-4">
                  <svg className="w-full h-full" viewBox="0 0 36 36">
                     <path className="text-slate-700" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" strokeWidth="3" />
-                    <path className="text-blue-500" strokeDasharray={`${(stats.active_connections || 0) * 2}, 100`} d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" strokeWidth="3" />
+                    <path className="text-blue-500 transition-all duration-1000 ease-out" strokeDasharray={`${Math.min((stats.active_connections || 0), 100)}, 100`} d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" strokeWidth="3" />
                  </svg>
                  <div className="absolute inset-0 flex items-center justify-center flex-col">
                      <span className="text-3xl font-bold text-white">{stats.active_connections || 0}</span>
-                     <span className="text-xs text-slate-400">/ 100 max</span>
+                     <span className="text-xs text-slate-400">/ {stats.active_connections > 90 ? '!!' : '100'}</span>
                  </div>
              </div>
         </div>

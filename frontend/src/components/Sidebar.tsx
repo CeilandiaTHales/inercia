@@ -1,12 +1,22 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { LayoutDashboard, Table, Shield, LogOut, Terminal, Blocks, Wand2, Globe } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
+import { api } from '../api';
 
 const Sidebar = () => {
   const location = useLocation();
   const { t, language, setLanguage } = useLanguage();
+  const [branding, setBranding] = useState({ org: 'Inércia', proj: 'Studio' });
   
+  useEffect(() => {
+    api.get('/config').then(c => {
+        if(c.organization && c.project) {
+            setBranding({ org: c.organization, proj: c.project });
+        }
+    }).catch(() => {});
+  }, []);
+
   const isActive = (path: string) => location.pathname === path ? 'bg-slate-800 text-emerald-400 border-r-2 border-emerald-400' : 'text-slate-400 hover:text-white hover:bg-slate-900';
 
   const handleLogout = () => {
@@ -21,12 +31,11 @@ const Sidebar = () => {
   return (
     <div className="w-64 bg-slate-950 border-r border-slate-800 flex flex-col flex-shrink-0">
       <div className="p-6">
-        <div className="flex items-center justify-between mb-8">
-            <div className="flex items-center gap-2">
-                <Terminal className="w-8 h-8 text-emerald-500" />
-                <span className="text-xl font-bold text-white tracking-wider">INÉRCIA</span>
-            </div>
+        <div className="flex items-center gap-2 mb-1">
+            <Terminal className="w-6 h-6 text-emerald-500" />
+            <span className="text-lg font-bold text-white tracking-wide truncate">{branding.org}</span>
         </div>
+        <div className="text-xs text-slate-500 uppercase tracking-widest mb-8 pl-8">{branding.proj}</div>
         
         <nav className="space-y-1">
           <Link to="/" className={`flex items-center gap-3 px-4 py-3 rounded-l-md transition-colors ${isActive('/')}`}>
