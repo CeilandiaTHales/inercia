@@ -8,9 +8,15 @@ const REDIS_URL = process.env.REDIS_URL || 'redis://redis:6379';
 console.log('Starting Inércia Worker...');
 console.log(`Connecting to Redis at ${REDIS_URL}`);
 
-// Connection options for Redis
+// Parse the Redis URL to extract host, port, and password
+// This is required because BullMQ ConnectionOptions does not support a raw 'url' property in strict TS
+const parsedUrl = new URL(REDIS_URL);
+
 const connection = {
-  url: REDIS_URL,
+  host: parsedUrl.hostname,
+  port: Number(parsedUrl.port) || 6379,
+  password: parsedUrl.password || undefined,
+  username: parsedUrl.username || undefined,
 };
 
 // Create a worker instance to process 'default' queue

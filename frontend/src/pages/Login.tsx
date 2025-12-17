@@ -58,8 +58,9 @@ const Login = () => {
 
             <div className="mt-6 border-t border-slate-800 pt-6">
                 <p className="text-center text-slate-500 text-sm mb-4">Or continue with</p>
+                {/* Fixed: Use relative path so it works on VPS IP/Domain automatically */}
                 <a 
-                    href="http://localhost:3000/api/auth/google" 
+                    href="/api/auth/google" 
                     className="flex items-center justify-center gap-2 w-full bg-white text-slate-900 font-bold py-2 rounded hover:bg-slate-200 transition-colors"
                 >
                     <svg className="w-5 h-5" viewBox="0 0 24 24">

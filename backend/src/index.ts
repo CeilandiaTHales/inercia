@@ -130,8 +130,9 @@ app.get('/api/auth/google', passport.authenticate('google', { scope: ['profile',
 app.get('/api/auth/google/callback', passport.authenticate('google', { session: false }), (req: any, res) => {
   const user = req.user;
   const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, process.env.JWT_SECRET as string, { expiresIn: '12h' });
-  // Redirect to frontend with token
-  res.redirect(`${process.env.FRONTEND_URL}/#/?token=${token}`);
+  // Redirect to frontend specific callback route RELATIVELY
+  // This ensures it works whether you are on localhost, IP, or domain name
+  res.redirect(`/#/auth/callback?token=${token}`);
 });
 
 // System Routes (Protected)

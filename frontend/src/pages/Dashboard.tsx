@@ -82,7 +82,7 @@ const Dashboard = () => {
             <br />
             <p className="mb-2"># Initialize</p>
             <p className="text-blue-400">import &#123; createClient &#125; from '@inercia/js'</p>
-            <p>const inercia = createClient('http://your-vps-ip:8080', 'YOUR_API_KEY')</p>
+            <p>const inercia = createClient('{window.location.origin}', 'YOUR_API_KEY')</p>
         </div>
       </div>
     </div>
