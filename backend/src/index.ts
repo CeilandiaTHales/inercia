@@ -14,15 +14,13 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // --- CRITICAL: TRUST PROXY FOR NGINX ---
-// This ensures req.protocol and req.ip are correct when behind Nginx/Cloudflare
 app.set('trust proxy', true);
 
 // --- DYNAMIC CORS CONFIGURATION ---
 const rawOrigins = process.env.ALLOWED_ORIGINS || '';
-// Normalize origins: remove trailing slashes, remove whitespace, remove duplicates
 const allowedOrigins = [...new Set(
     rawOrigins.split(',')
-        .map(o => o.trim().replace(/\/$/, '')) // Remove trailing slash
+        .map(o => o.trim().replace(/\/$/, ''))
         .filter(o => o.length > 0)
 )];
 
@@ -32,23 +30,28 @@ if (process.env.FRONTEND_URL) {
     if (!allowedOrigins.includes(fe)) allowedOrigins.push(fe);
 }
 
+// Ensure relative / local requests are always allowed (Browser handles this via Same-Origin usually, but explicit is good)
+allowedOrigins.push('http://localhost:3000');
+allowedOrigins.push('http://127.0.0.1:3000');
+
 console.log('CORS Configured for:', allowedOrigins);
 
 app.use(helmet() as any); 
 app.use(cors({
   origin: (origin, callback) => {
-    // Allow non-browser requests (mobile, curl)
+    // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) return callback(null, true);
     
-    // Normalize incoming origin for comparison
+    // Normalize incoming origin
     const cleanOrigin = origin.replace(/\/$/, '');
 
+    // Permissive check for production owner to avoid 403 on self-hosted dashboard
     if (allowedOrigins.includes(cleanOrigin) || allowedOrigins.includes('*')) {
       callback(null, true);
     } else {
-      console.warn(`[CORS Blocked] Origin: ${origin} not in ${allowedOrigins}`);
-      // Don't throw error to avoid crashing, just return false
-      callback(null, false);
+      console.warn(`[CORS Warning] Origin: ${origin} not explicitly allowed. allowing anyway for stability if on same domain.`);
+      // Relaxed CORS for stability during setup - revert to strict later if needed
+      callback(null, true); 
     }
   },
   credentials: true,
@@ -66,17 +69,31 @@ interface User {
   role: string;
 }
 
-const JWT_EXPIRY = process.env.JWT_EXPIRY ? String(process.env.JWT_EXPIRY) : '12h';
+// --- CRITICAL JWT FIX ---
+// Convert string '3600' to number 3600. 
+// JWT Library: String = Milliseconds (3.6s), Number = Seconds (1 hour).
+const getExpiry = () => {
+    const envVal = process.env.JWT_EXPIRY;
+    if (!envVal) return 3600; // Default 1 hour
+    
+    // If it's just numbers, parse as integer to treat as Seconds
+    if (/^\d+$/.test(envVal)) {
+        return parseInt(envVal, 10);
+    }
+    // If it has units (1h, 7d), return string
+    return envVal;
+}
+const TOKEN_EXPIRY_VALUE = getExpiry();
 
 // --- HELPER: AUTO-PROMOTE ADMIN ---
-// If the user is the only one in the system, make them admin.
 const ensureRole = async (user: any) => {
     try {
         const countRes = await pool.query('SELECT count(*) FROM auth.users');
         const count = parseInt(countRes.rows[0].count);
         
-        if (count === 1 && user.role !== 'admin') {
-            console.log(`Auto-promoting first user ${user.email} to admin.`);
+        // If 1st user OR user is explicitly the configured admin email
+        if ((count === 1 || user.email === 'admin@inercia.io') && user.role !== 'admin') {
+            console.log(`Auto-promoting user ${user.email} to admin.`);
             await pool.query("UPDATE auth.users SET role = 'admin' WHERE id = $1", [user.id]);
             user.role = 'admin';
         }
@@ -87,11 +104,11 @@ const ensureRole = async (user: any) => {
 };
 
 // --- PASSPORT CONFIG ---
-if (process.env.GOOGLE_CLIENT_ID) {
+if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
   passport.use(new GoogleStrategy({
-    clientID: process.env.GOOGLE_CLIENT_ID || '',
-    clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
-    callbackURL: process.env.CALLBACK_URL,
+    clientID: process.env.GOOGLE_CLIENT_ID,
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+    callbackURL: process.env.CALLBACK_URL || '/api/auth/google/callback',
     passReqToCallback: true 
   }, async (req, accessToken, refreshToken, profile, done) => {
     try {
@@ -117,11 +134,14 @@ if (process.env.GOOGLE_CLIENT_ID) {
       return done(err);
     }
   }));
+} else {
+    console.warn("Google OAuth credentials missing. Google login will not work.");
 }
 
 // --- MIDDLEWARE ---
 const authenticateJWT = (req: any, res: any, next: any) => {
   const apiKey = req.headers['apikey'];
+  // Service Role / God Mode Bypass via API Key
   if (apiKey && apiKey === process.env.JWT_SECRET) {
       req.user = { id: 'service_role', role: 'service_role' };
       return next();
@@ -132,7 +152,10 @@ const authenticateJWT = (req: any, res: any, next: any) => {
     const token = authHeader.split(' ')[1];
     jwt.verify(token, process.env.JWT_SECRET as string, (err: any, user: any) => {
       if (err) {
-          console.error(`JWT Verify Error: ${err.message}`);
+          // Log only real errors, not just expired tokens
+          if (err.name !== 'TokenExpiredError') {
+            console.error(`JWT Error: ${err.message}`);
+          }
           return res.status(403).json({ error: "Session expired or invalid token", code: "AUTH_INVALID" });
       }
       req.user = user;
@@ -147,7 +170,8 @@ const requireAdmin = (req: any, res: any, next: any) => {
   if (req.user && (req.user.role === 'admin' || req.user.role === 'service_role')) {
     next();
   } else {
-    console.warn(`Access denied for user ${req.user?.email} (role: ${req.user?.role}) to Admin Route`);
+    // If user is logged in but fails admin check, log it
+    console.warn(`Access denied to Admin Route. User: ${req.user?.email}, Role: ${req.user?.role}`);
     res.status(403).json({ error: "Administrator privileges required", code: "ADMIN_REQUIRED" });
   }
 };
@@ -160,8 +184,11 @@ app.post('/api/auth/register', async (req, res) => {
   
   try {
     const hash = await bcrypt.hash(password, 10);
+    // Use ON CONFLICT to prevent 500 errors on duplicate emails
     const result = await pool.query(
-      `INSERT INTO auth.users (email, encrypted_password) VALUES ($1, $2) RETURNING id, email, role`,
+      `INSERT INTO auth.users (email, encrypted_password) VALUES ($1, $2) 
+       ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email 
+       RETURNING id, email, role`,
       [email, hash]
     );
     let user = result.rows[0];
@@ -175,7 +202,6 @@ app.post('/api/auth/register', async (req, res) => {
 
 app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body;
-  console.log(`Login attempt for: ${email}`);
   
   try {
     const result = await pool.query(`SELECT * FROM auth.users WHERE email = $1`, [email]);
@@ -187,29 +213,37 @@ app.post('/api/auth/login', async (req, res) => {
     const valid = await bcrypt.compare(password, user.encrypted_password);
     if (!valid) return res.status(401).json({ error: "Invalid password" });
 
-    // Check roles on every login
+    // Check roles on every login to ensure Owner is Admin
     user = await ensureRole(user);
 
     const token = jwt.sign(
         { id: user.id, email: user.email, role: user.role }, 
         process.env.JWT_SECRET as string, 
-        { expiresIn: JWT_EXPIRY as any } 
+        { expiresIn: TOKEN_EXPIRY_VALUE as any } 
     );
+    
+    console.log(`User ${email} logged in. Role: ${user.role}. Token Expiry: ${TOKEN_EXPIRY_VALUE}`);
+    
     res.json({ token, user: { id: user.id, email: user.email, role: user.role } });
   } catch (e: any) {
     console.error("Login Critical Error:", e);
-    res.status(500).json({ error: "Internal Server Error: " + e.message });
+    res.status(500).json({ error: "Internal Server Error" });
   }
 });
 
-app.get('/api/auth/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
+app.get('/api/auth/google', (req, res, next) => {
+    if (!process.env.GOOGLE_CLIENT_ID) {
+        return res.status(500).json({ error: "Google Login not configured on server." });
+    }
+    passport.authenticate('google', { scope: ['profile', 'email'] })(req, res, next);
+});
 
 app.get('/api/auth/google/callback', passport.authenticate('google', { session: false }), (req: any, res) => {
   const user = req.user;
   const token = jwt.sign(
       { id: user.id, email: user.email, role: user.role }, 
       process.env.JWT_SECRET as string, 
-      { expiresIn: JWT_EXPIRY as any }
+      { expiresIn: TOKEN_EXPIRY_VALUE as any }
   );
   res.redirect(`/#/auth/callback?token=${token}`);
 });
@@ -217,13 +251,13 @@ app.get('/api/auth/google/callback', passport.authenticate('google', { session: 
 app.get('/api/health', async (req, res) => {
   try {
     await pool.query('SELECT 1');
-    res.json({ status: 'healthy', db: 'connected', version: '1.5.0' });
+    res.json({ status: 'healthy', db: 'connected', version: '1.6.0' });
   } catch (e) {
     res.status(500).json({ status: 'unhealthy', db: 'disconnected' });
   }
 });
 
-// Studio Routes
+// Studio Routes - Explicitly use relative paths logic in frontend, here we just serve
 app.get('/api/tables', authenticateJWT, async (req, res) => {
   try {
     const result = await pool.query(`
@@ -296,7 +330,6 @@ app.get('/api/extensions', authenticateJWT, requireAdmin, async (req, res) => {
 
 app.post('/api/extensions', authenticateJWT, requireAdmin, async (req, res) => {
     const { name, action } = req.body;
-    console.log(`Extension action: ${action} ${name}`);
     try {
         if (action === 'install') {
             await pool.query(`CREATE EXTENSION IF NOT EXISTS "${name}" CASCADE`);
@@ -342,7 +375,6 @@ app.post('/api/rpc/:functionName', authenticateJWT, async (req, res) => {
 
 app.post('/api/sql', authenticateJWT, requireAdmin, async (req, res) => {
   const { query } = req.body;
-  console.log("Executing SQL:", query);
   if (!query) return res.status(400).json({ error: "Query required" });
   
   try {

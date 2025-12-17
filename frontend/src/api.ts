@@ -1,3 +1,6 @@
+// IMPORTANT: Use relative path. 
+// The browser will resolve this against the current domain/port.
+// This prevents the app from trying to go out to the internet and come back in.
 export const API_URL = '/api';
 
 export const getAuthHeaders = (): Record<string, string> => {
@@ -21,9 +24,11 @@ const handleResponse = async (res: Response) => {
 
     // Try to parse JSON error message
     let errorMessage = res.statusText;
+    let errorCode = "";
     try {
         const json = await res.json();
         if (json.error) errorMessage = json.error;
+        if (json.code) errorCode = json.code;
     } catch (e) {
         // If parsing fails, stick to statusText or default
         console.warn("Non-JSON error response", res.status);
@@ -37,6 +42,11 @@ const handleResponse = async (res: Response) => {
     }
 
     if (res.status === 403) {
+        // If it's an invalid token specifically, force logout.
+        if (errorCode === 'AUTH_INVALID') {
+             localStorage.removeItem('inercia_token');
+             window.location.hash = '/login';
+        }
         console.warn("Forbidden access - check user roles");
         throw new Error(errorMessage || "Access Denied: You do not have permission to perform this action.");
     }
@@ -46,11 +56,14 @@ const handleResponse = async (res: Response) => {
 
 export const api = {
   get: async (endpoint: string) => {
-    const res = await fetch(`${API_URL}${endpoint}`, { headers: getAuthHeaders() });
+    // Ensure endpoint starts with slash if not provided
+    const path = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+    const res = await fetch(`${API_URL}${path}`, { headers: getAuthHeaders() });
     return handleResponse(res);
   },
   post: async (endpoint: string, body: any) => {
-    const res = await fetch(`${API_URL}${endpoint}`, {
+    const path = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+    const res = await fetch(`${API_URL}${path}`, {
       method: 'POST',
       headers: getAuthHeaders(),
       body: JSON.stringify(body)
