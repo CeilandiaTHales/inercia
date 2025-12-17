@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS auth.users (
 
 -- Seed Default Project
 INSERT INTO inercia_sys.projects (name, slug, db_url, api_url, internal_port)
-VALUES ('Inércia Default', 'default', 'postgres://postgres:change_this_password_for_production_please@postgres:5432/inercia_base', 'http://localhost:3000', 3000)
+VALUES ('Inércia Default', 'default', 'postgres://postgres:qw2silx8ttrevootrxenx3qgjqd2qnfp@postgres:5432/inercia_base', 'http://localhost:3000', 3000)
 ON CONFLICT (slug) DO NOTHING;
 
 -- Seed Initial Admin (admin@inercia.io / admin123)
