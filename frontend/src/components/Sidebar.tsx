@@ -1,16 +1,22 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Table, Shield, LogOut, Terminal, Blocks, Wand2, Globe, ChevronDown, Plus } from 'lucide-react';
+import { LayoutDashboard, Table, Shield, LogOut, Terminal, Blocks, Wand2, Globe, ChevronDown, Plus, X, Save } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
 import { api } from '../api';
+import { useToast } from '../contexts/ToastContext';
 
 const Sidebar = () => {
   const location = useLocation();
+  const { showToast } = useToast();
   const { t, language, setLanguage } = useLanguage();
   const [projects, setProjects] = useState<any[]>([]);
   const [activeProject, setActiveProject] = useState<any>(null);
   const [showProjectDropdown, setShowProjectDropdown] = useState(false);
+  const [showCreateModal, setShowCreateModal] = useState(false);
   
+  // New Project Form
+  const [newProject, setNewProject] = useState({ name: '', slug: '', db_url: 'SYSTEM_INTERNAL' });
+
   useEffect(() => {
     loadProjects();
   }, []);
@@ -28,11 +34,22 @@ const Sidebar = () => {
     } catch(e) {}
   };
 
+  const handleCreateProject = async () => {
+      if (!newProject.name || !newProject.slug) return;
+      try {
+          const res = await api.post('/projects', newProject);
+          setProjects([res, ...projects]);
+          switchProject(res);
+          setShowCreateModal(false);
+          showToast("Projeto criado com sucesso!");
+      } catch (e: any) { showToast(e.message, 'error'); }
+  };
+
   const switchProject = (p: any) => {
       setActiveProject(p);
       localStorage.setItem('inercia_active_project', p.id);
       setShowProjectDropdown(false);
-      window.location.reload(); // Hard reload to clear all scoped caches
+      window.location.reload(); 
   };
 
   const isActive = (path: string) => location.pathname === path ? 'bg-slate-800 text-emerald-400 border-r-2 border-emerald-400' : 'text-slate-400 hover:text-white hover:bg-slate-900';
@@ -69,12 +86,54 @@ const Sidebar = () => {
                           </button>
                       ))}
                   </div>
-                  <button className="w-full p-3 text-xs text-slate-500 hover:text-white hover:bg-slate-800 border-t border-slate-700 flex items-center gap-2 justify-center transition-colors">
+                  <button 
+                    onClick={() => { setShowCreateModal(true); setShowProjectDropdown(false); }}
+                    className="w-full p-3 text-xs text-slate-500 hover:text-white hover:bg-slate-800 border-t border-slate-700 flex items-center gap-2 justify-center transition-colors"
+                  >
                       <Plus size={14}/> Criar Novo Projeto
                   </button>
               </div>
           )}
       </div>
+
+      {/* Create Project Modal */}
+      {showCreateModal && (
+          <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[100] p-4">
+              <div className="bg-slate-900 border border-slate-700 rounded-xl p-6 w-full max-w-md shadow-2xl animate-fade-in">
+                  <div className="flex justify-between items-center mb-6">
+                      <h3 className="text-xl font-bold text-white">Novo Projeto</h3>
+                      <button onClick={() => setShowCreateModal(false)} className="text-slate-500 hover:text-white"><X size={20}/></button>
+                  </div>
+                  <div className="space-y-4">
+                      <div>
+                          <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Nome do Projeto</label>
+                          <input 
+                            className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-white focus:border-emerald-500 outline-none" 
+                            placeholder="Ex: Minha Loja" 
+                            value={newProject.name}
+                            onChange={e => setNewProject({...newProject, name: e.target.value, slug: e.target.value.toLowerCase().replace(/ /g, '-')})}
+                          />
+                      </div>
+                      <div>
+                          <label className="block text-xs font-bold text-slate-500 uppercase mb-1">Slug (Identificador)</label>
+                          <input 
+                            className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-white focus:border-emerald-500 outline-none" 
+                            placeholder="ex-loja-v1" 
+                            value={newProject.slug}
+                            onChange={e => setNewProject({...newProject, slug: e.target.value})}
+                          />
+                      </div>
+                      <div className="bg-slate-800 p-3 rounded text-[10px] text-slate-400">
+                          Ao criar, o projeto usará o banco de dados interno por padrão. Você poderá alterar a string de conexão nas configurações depois.
+                      </div>
+                  </div>
+                  <div className="flex justify-end gap-3 mt-8">
+                      <button onClick={() => setShowCreateModal(false)} className="text-slate-400 hover:text-white px-4">Cancelar</button>
+                      <button onClick={handleCreateProject} className="bg-emerald-600 hover:bg-emerald-500 text-white px-6 py-2 rounded-lg font-bold flex items-center gap-2"><Save size={18}/> Criar Projeto</button>
+                  </div>
+              </div>
+          </div>
+      )}
 
       <div className="flex-1 p-4">
         <nav className="space-y-1">
@@ -82,16 +141,12 @@ const Sidebar = () => {
             <LayoutDashboard size={20} />
             <span className="font-medium">{t.sidebar.dashboard}</span>
           </Link>
-          
           <div className="pt-6 pb-2 px-4 text-[10px] font-bold text-slate-600 uppercase tracking-widest">{t.sidebar.database}</div>
-          
           <Link to="/tables" className={`flex items-center gap-3 px-4 py-3 rounded transition-colors ${isActive('/tables')}`}>
             <Table size={20} />
             <span className="font-medium">{t.sidebar.browser}</span>
           </Link>
-
           <div className="pt-6 pb-2 px-4 text-[10px] font-bold text-slate-600 uppercase tracking-widest">{t.sidebar.logic}</div>
-
           <Link to="/logic" className={`flex items-center gap-3 px-4 py-3 rounded transition-colors ${isActive('/logic')}`}>
             <Wand2 size={20} />
             <span className="font-medium">{t.sidebar.logic}</span>
