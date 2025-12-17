@@ -1,0 +1,17 @@
+import React from 'react';
+import ReactDOM from 'react-dom/client';
+import App from './frontend/src/App';
+import './frontend/src/index.css'; // Assuming Tailwind directives are here or handled globally via index.html
+
+// Ensure the DOM element exists before rendering
+const rootElement = document.getElementById('root');
+
+if (rootElement) {
+  ReactDOM.createRoot(rootElement).render(
+    <React.StrictMode>
+      <App />
+    </React.StrictMode>
+  );
+} else {
+  console.error('Failed to find the root element');
+}
