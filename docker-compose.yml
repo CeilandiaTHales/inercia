@@ -29,8 +29,8 @@ services:
 
   api:
     build:
-      context: ./backend
-      dockerfile: ../infrastructure/Dockerfile.node
+      context: .
+      dockerfile: infrastructure/Dockerfile.node
     container_name: inercia_api
     restart: always
     environment:
@@ -52,8 +52,8 @@ services:
 
   worker:
     build:
-      context: ./backend
-      dockerfile: ../infrastructure/Dockerfile.node
+      context: .
+      dockerfile: infrastructure/Dockerfile.node
     container_name: inercia_worker
     restart: always
     command: ["npm", "run", "worker"]
@@ -68,8 +68,8 @@ services:
 
   studio:
     build:
-      context: ./frontend
-      dockerfile: ../infrastructure/Dockerfile.react
+      context: .
+      dockerfile: infrastructure/Dockerfile.react
     container_name: inercia_studio
     restart: always
     ports:
