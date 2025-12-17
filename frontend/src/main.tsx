@@ -1,7 +1,8 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App'
-import './index.css' // Critical: Imports the Tailwind directives
+import './index.css' 
+import { LanguageProvider } from './contexts/LanguageContext';
 
 const root = document.getElementById('root');
 
@@ -11,6 +12,8 @@ if (!root) {
 
 ReactDOM.createRoot(root).render(
   <React.StrictMode>
-    <App />
+    <LanguageProvider>
+      <App />
+    </LanguageProvider>
   </React.StrictMode>,
 )

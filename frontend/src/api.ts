@@ -69,5 +69,26 @@ export const api = {
       body: JSON.stringify(body)
     });
     return handleResponse(res);
+  },
+  put: async (endpoint: string, body: any) => {
+    const path = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+    const res = await fetch(`${API_URL}${path}`, {
+      method: 'PUT',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(body)
+    });
+    return handleResponse(res);
+  },
+  delete: async (endpoint: string, body?: any) => {
+    const path = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+    const options: RequestInit = {
+      method: 'DELETE',
+      headers: getAuthHeaders()
+    };
+    if (body) {
+        options.body = JSON.stringify(body);
+    }
+    const res = await fetch(`${API_URL}${path}`, options);
+    return handleResponse(res);
   }
 };

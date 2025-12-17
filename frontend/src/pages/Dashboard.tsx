@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../api';
 import { Activity, Server, Database, Lock, Plug } from 'lucide-react';
+import { useLanguage } from '../contexts/LanguageContext';
 
 const Dashboard = () => {
+  const { t } = useLanguage();
   const [health, setHealth] = useState<any>(null);
   const [tables, setTables] = useState<any[]>([]);
 
@@ -23,10 +25,10 @@ const Dashboard = () => {
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center mb-8">
-        <h1 className="text-3xl font-bold text-white">System Overview</h1>
+        <h1 className="text-3xl font-bold text-white">{t.dashboard.title}</h1>
         <div className="flex gap-2">
             <button className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded font-bold flex items-center gap-2">
-                <Plug size={18} /> Connect App
+                <Plug size={18} /> {t.dashboard.connect}
             </button>
         </div>
       </div>
@@ -38,11 +40,11 @@ const Dashboard = () => {
                 <Activity size={64} className="text-emerald-500" />
             </div>
             <div className="flex items-center justify-between mb-4 relative z-10">
-                <h3 className="text-slate-400 font-medium">System Status</h3>
+                <h3 className="text-slate-400 font-medium">{t.dashboard.status}</h3>
                 <Activity className="text-emerald-500" />
             </div>
             <div className="text-2xl font-bold text-white relative z-10">
-                {health?.status === 'healthy' ? 'Operational' : 'Offline'}
+                {health?.status === 'healthy' ? t.dashboard.operational : t.dashboard.offline}
             </div>
             <p className="text-sm text-slate-500 mt-2 relative z-10">API v{health?.version || '1.0'}</p>
         </div>
@@ -54,7 +56,7 @@ const Dashboard = () => {
                 <Database className="text-blue-500" />
             </div>
             <div className="text-2xl font-bold text-white">
-                {health?.db === 'connected' ? 'Connected' : 'Error'}
+                {health?.db === 'connected' ? t.dashboard.db_connected : 'Error'}
             </div>
             <p className="text-sm text-slate-500 mt-2">PostgreSQL 15</p>
         </div>
@@ -62,7 +64,7 @@ const Dashboard = () => {
         {/* Tables Count */}
         <div className="bg-slate-800 p-6 rounded-lg border border-slate-700">
             <div className="flex items-center justify-between mb-4">
-                <h3 className="text-slate-400 font-medium">Tables</h3>
+                <h3 className="text-slate-400 font-medium">{t.dashboard.tables}</h3>
                 <Server className="text-purple-500" />
             </div>
             <div className="text-2xl font-bold text-white">
@@ -74,7 +76,7 @@ const Dashboard = () => {
         {/* Security */}
         <div className="bg-slate-800 p-6 rounded-lg border border-slate-700">
             <div className="flex items-center justify-between mb-4">
-                <h3 className="text-slate-400 font-medium">Security</h3>
+                <h3 className="text-slate-400 font-medium">{t.dashboard.security}</h3>
                 <Lock className="text-yellow-500" />
             </div>
             <div className="text-2xl font-bold text-white">
@@ -86,7 +88,7 @@ const Dashboard = () => {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-8">
         <div className="bg-slate-800 rounded-lg border border-slate-700 p-6">
-            <h2 className="text-xl font-bold text-white mb-4">Connection Details</h2>
+            <h2 className="text-xl font-bold text-white mb-4">{t.dashboard.conn_details}</h2>
             <div className="space-y-4">
                 <div>
                     <label className="text-xs text-slate-500 uppercase font-bold">API URL</label>
@@ -104,7 +106,7 @@ const Dashboard = () => {
         </div>
 
         <div className="bg-slate-800 rounded-lg border border-slate-700 p-6">
-             <h2 className="text-xl font-bold text-white mb-4">Service Status</h2>
+             <h2 className="text-xl font-bold text-white mb-4">{t.dashboard.services}</h2>
              <div className="space-y-3">
                  <div className="flex justify-between items-center p-3 bg-slate-900 rounded border border-slate-700">
                      <span className="text-slate-300">Auth Service</span>

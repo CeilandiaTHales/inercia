@@ -24,13 +24,11 @@ const allowedOrigins = [...new Set(
         .filter(o => o.length > 0)
 )];
 
-// Add FRONTEND_URL automatically if set
 if (process.env.FRONTEND_URL) {
     const fe = process.env.FRONTEND_URL.replace(/\/$/, '');
     if (!allowedOrigins.includes(fe)) allowedOrigins.push(fe);
 }
 
-// Ensure relative / local requests are always allowed (Browser handles this via Same-Origin usually, but explicit is good)
 allowedOrigins.push('http://localhost:3000');
 allowedOrigins.push('http://127.0.0.1:3000');
 
@@ -39,23 +37,17 @@ console.log('CORS Configured for:', allowedOrigins);
 app.use(helmet() as any); 
 app.use(cors({
   origin: (origin, callback) => {
-    // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) return callback(null, true);
-    
-    // Normalize incoming origin
     const cleanOrigin = origin.replace(/\/$/, '');
-
-    // Permissive check for production owner to avoid 403 on self-hosted dashboard
     if (allowedOrigins.includes(cleanOrigin) || allowedOrigins.includes('*')) {
       callback(null, true);
     } else {
-      console.warn(`[CORS Warning] Origin: ${origin} not explicitly allowed. allowing anyway for stability if on same domain.`);
-      // Relaxed CORS for stability during setup - revert to strict later if needed
+      // Permissive for development/hybrid setups
       callback(null, true); 
     }
   },
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
   allowedHeaders: ['Content-Type', 'Authorization', 'apikey']
 }));
 
@@ -69,31 +61,21 @@ interface User {
   role: string;
 }
 
-// --- CRITICAL JWT FIX ---
-// Convert string '3600' to number 3600. 
-// JWT Library: String = Milliseconds (3.6s), Number = Seconds (1 hour).
 const getExpiry = () => {
     const envVal = process.env.JWT_EXPIRY;
-    if (!envVal) return 3600; // Default 1 hour
-    
-    // If it's just numbers, parse as integer to treat as Seconds
+    if (!envVal) return 3600; 
     if (/^\d+$/.test(envVal)) {
         return parseInt(envVal, 10);
     }
-    // If it has units (1h, 7d), return string
     return envVal;
 }
 const TOKEN_EXPIRY_VALUE = getExpiry();
 
-// --- HELPER: AUTO-PROMOTE ADMIN ---
 const ensureRole = async (user: any) => {
     try {
         const countRes = await pool.query('SELECT count(*) FROM auth.users');
         const count = parseInt(countRes.rows[0].count);
-        
-        // If 1st user OR user is explicitly the configured admin email
         if ((count === 1 || user.email === 'admin@inercia.io') && user.role !== 'admin') {
-            console.log(`Auto-promoting user ${user.email} to admin.`);
             await pool.query("UPDATE auth.users SET role = 'admin' WHERE id = $1", [user.id]);
             user.role = 'admin';
         }
@@ -125,23 +107,18 @@ if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
         );
         user = insert.rows[0];
       }
-      
       user = await ensureRole(user);
-
       return done(null, user);
     } catch (err: any) {
       console.error("OAuth Error:", err);
       return done(err);
     }
   }));
-} else {
-    console.warn("Google OAuth credentials missing. Google login will not work.");
 }
 
 // --- MIDDLEWARE ---
 const authenticateJWT = (req: any, res: any, next: any) => {
   const apiKey = req.headers['apikey'];
-  // Service Role / God Mode Bypass via API Key
   if (apiKey && apiKey === process.env.JWT_SECRET) {
       req.user = { id: 'service_role', role: 'service_role' };
       return next();
@@ -152,7 +129,6 @@ const authenticateJWT = (req: any, res: any, next: any) => {
     const token = authHeader.split(' ')[1];
     jwt.verify(token, process.env.JWT_SECRET as string, (err: any, user: any) => {
       if (err) {
-          // Log only real errors, not just expired tokens
           if (err.name !== 'TokenExpiredError') {
             console.error(`JWT Error: ${err.message}`);
           }
@@ -170,13 +146,19 @@ const requireAdmin = (req: any, res: any, next: any) => {
   if (req.user && (req.user.role === 'admin' || req.user.role === 'service_role')) {
     next();
   } else {
-    // If user is logged in but fails admin check, log it
-    console.warn(`Access denied to Admin Route. User: ${req.user?.email}, Role: ${req.user?.role}`);
     res.status(403).json({ error: "Administrator privileges required", code: "ADMIN_REQUIRED" });
   }
 };
 
 // --- ROUTES ---
+
+// Public Config Endpoint for Frontend
+app.get('/api/config', (req, res) => {
+    res.json({
+        apiExternalUrl: process.env.API_EXTERNAL_URL || `https://${process.env.API_DOMAIN_NAME}` || 'http://localhost:3000',
+        env: process.env.NODE_ENV || 'development'
+    });
+});
 
 app.post('/api/auth/register', async (req, res) => {
   const { email, password } = req.body;
@@ -184,7 +166,6 @@ app.post('/api/auth/register', async (req, res) => {
   
   try {
     const hash = await bcrypt.hash(password, 10);
-    // Use ON CONFLICT to prevent 500 errors on duplicate emails
     const result = await pool.query(
       `INSERT INTO auth.users (email, encrypted_password) VALUES ($1, $2) 
        ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email 
@@ -195,14 +176,12 @@ app.post('/api/auth/register', async (req, res) => {
     user = await ensureRole(user);
     res.json(user);
   } catch (e: any) {
-    console.error("Register Error:", e);
     res.status(500).json({ error: "Registration failed." });
   }
 });
 
 app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body;
-  
   try {
     const result = await pool.query(`SELECT * FROM auth.users WHERE email = $1`, [email]);
     if (result.rows.length === 0) return res.status(401).json({ error: "User not found" });
@@ -213,7 +192,6 @@ app.post('/api/auth/login', async (req, res) => {
     const valid = await bcrypt.compare(password, user.encrypted_password);
     if (!valid) return res.status(401).json({ error: "Invalid password" });
 
-    // Check roles on every login to ensure Owner is Admin
     user = await ensureRole(user);
 
     const token = jwt.sign(
@@ -221,20 +199,14 @@ app.post('/api/auth/login', async (req, res) => {
         process.env.JWT_SECRET as string, 
         { expiresIn: TOKEN_EXPIRY_VALUE as any } 
     );
-    
-    console.log(`User ${email} logged in. Role: ${user.role}. Token Expiry: ${TOKEN_EXPIRY_VALUE}`);
-    
     res.json({ token, user: { id: user.id, email: user.email, role: user.role } });
   } catch (e: any) {
-    console.error("Login Critical Error:", e);
     res.status(500).json({ error: "Internal Server Error" });
   }
 });
 
 app.get('/api/auth/google', (req, res, next) => {
-    if (!process.env.GOOGLE_CLIENT_ID) {
-        return res.status(500).json({ error: "Google Login not configured on server." });
-    }
+    if (!process.env.GOOGLE_CLIENT_ID) return res.status(500).json({ error: "Google Login not configured." });
     passport.authenticate('google', { scope: ['profile', 'email'] })(req, res, next);
 });
 
@@ -251,13 +223,14 @@ app.get('/api/auth/google/callback', passport.authenticate('google', { session: 
 app.get('/api/health', async (req, res) => {
   try {
     await pool.query('SELECT 1');
-    res.json({ status: 'healthy', db: 'connected', version: '1.6.0' });
+    res.json({ status: 'healthy', db: 'connected', version: '1.7.0' });
   } catch (e) {
     res.status(500).json({ status: 'unhealthy', db: 'disconnected' });
   }
 });
 
-// Studio Routes - Explicitly use relative paths logic in frontend, here we just serve
+// --- DATA BROWSER ROUTES ---
+
 app.get('/api/tables', authenticateJWT, async (req, res) => {
   try {
     const result = await pool.query(`
@@ -272,6 +245,25 @@ app.get('/api/tables', authenticateJWT, async (req, res) => {
   }
 });
 
+// Get Metadata (Columns) for a table
+app.get('/api/tables/:schema/:table/meta', authenticateJWT, async (req, res) => {
+    const { schema, table } = req.params;
+    if (!/^[a-zA-Z0-9_]+$/.test(schema) || !/^[a-zA-Z0-9_]+$/.test(table)) {
+        return res.status(400).json({ error: "Invalid name" });
+    }
+    try {
+        const result = await pool.query(`
+            SELECT column_name, data_type, is_nullable, column_default 
+            FROM information_schema.columns 
+            WHERE table_schema = $1 AND table_name = $2
+            ORDER BY ordinal_position
+        `, [schema, table]);
+        res.json(result.rows);
+    } catch (e: any) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 app.get('/api/tables/:schema/:table/data', authenticateJWT, async (req, res) => {
   const { schema, table } = req.params;
   const { limit = 100, offset = 0 } = req.query;
@@ -279,21 +271,104 @@ app.get('/api/tables/:schema/:table/data', authenticateJWT, async (req, res) => 
   if (!/^[a-zA-Z0-9_]+$/.test(schema) || !/^[a-zA-Z0-9_]+$/.test(table)) {
      return res.status(400).json({ error: "Invalid table name" });
   }
-
   try {
+    // Determine Primary Key for identifying rows later
+    const pkRes = await pool.query(`
+        SELECT a.attname
+        FROM   pg_index i
+        JOIN   pg_attribute a ON a.attrelid = i.indrelid
+        AND a.attnum = ANY(i.indkey)
+        WHERE  i.indrelid = '"${schema}"."${table}"'::regclass
+        AND    i.indisprimary;
+    `);
+    const pk = pkRes.rows[0]?.attname || 'id'; // Default to id if not found
+
     const result = await pool.query(`SELECT * FROM "${schema}"."${table}" LIMIT $1 OFFSET $2`, [limit, offset]);
-    res.json(result.rows);
+    res.json({ data: result.rows, pk });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
 });
 
+// INSERT ROW
+app.post('/api/tables/:schema/:table/data', authenticateJWT, async (req, res) => {
+    const { schema, table } = req.params;
+    const data = req.body;
+    
+    if (!/^[a-zA-Z0-9_]+$/.test(schema) || !/^[a-zA-Z0-9_]+$/.test(table)) return res.status(400).json({ error: "Invalid name" });
+
+    try {
+        const columns = Object.keys(data).map(c => `"${c}"`).join(', ');
+        const values = Object.values(data);
+        const placeholders = values.map((_, i) => `$${i + 1}`).join(', ');
+
+        const query = `INSERT INTO "${schema}"."${table}" (${columns}) VALUES (${placeholders}) RETURNING *`;
+        const result = await pool.query(query, values);
+        res.json(result.rows[0]);
+    } catch (e: any) {
+        res.status(400).json({ error: e.message });
+    }
+});
+
+// UPDATE ROW
+app.put('/api/tables/:schema/:table/data/:id', authenticateJWT, async (req, res) => {
+    const { schema, table, id } = req.params;
+    const data = req.body;
+    const pkColumn = req.query.pk as string || 'id'; // Pass PK column name in query
+
+    if (!/^[a-zA-Z0-9_]+$/.test(schema) || !/^[a-zA-Z0-9_]+$/.test(table)) return res.status(400).json({ error: "Invalid name" });
+
+    try {
+        const updates = Object.keys(data).map((key, i) => `"${key}" = $${i + 1}`).join(', ');
+        const values = Object.values(data);
+        
+        // Add ID as the last parameter
+        values.push(id);
+        
+        const query = `UPDATE "${schema}"."${table}" SET ${updates} WHERE "${pkColumn}" = $${values.length} RETURNING *`;
+        
+        const result = await pool.query(query, values);
+        res.json(result.rows[0]);
+    } catch (e: any) {
+        console.error(e);
+        res.status(400).json({ error: e.message });
+    }
+});
+
+// DELETE ROW
+app.delete('/api/tables/:schema/:table/data/:id', authenticateJWT, async (req, res) => {
+    const { schema, table, id } = req.params;
+    const pkColumn = req.query.pk as string || 'id';
+
+    if (!/^[a-zA-Z0-9_]+$/.test(schema) || !/^[a-zA-Z0-9_]+$/.test(table)) return res.status(400).json({ error: "Invalid name" });
+
+    try {
+        await pool.query(`DELETE FROM "${schema}"."${table}" WHERE "${pkColumn}" = $1`, [id]);
+        res.json({ success: true });
+    } catch (e: any) {
+        res.status(400).json({ error: e.message });
+    }
+});
+
+app.post('/api/schemas', authenticateJWT, requireAdmin, async (req, res) => {
+    const { name } = req.body;
+    if (!/^[a-zA-Z0-9_]+$/.test(name)) return res.status(400).json({ error: "Invalid schema name" });
+    
+    try {
+        await pool.query(`CREATE SCHEMA IF NOT EXISTS "${name}"`);
+        res.json({ success: true });
+    } catch(e: any) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 app.post('/api/tables/create', authenticateJWT, requireAdmin, async (req, res) => {
-    const { name, columns } = req.body;
+    const { name, schema, columns } = req.body;
+    const schemaName = schema || 'public';
     if (!name || !columns) return res.status(400).json({error: "Invalid schema definition"});
 
     try {
-        let sql = `CREATE TABLE public."${name}" (
+        let sql = `CREATE TABLE "${schemaName}"."${name}" (
             id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
             created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()`;
         
@@ -305,7 +380,6 @@ app.post('/api/tables/create', authenticateJWT, requireAdmin, async (req, res) =
         await pool.query(sql);
         res.json({ success: true, message: `Table ${name} created` });
     } catch (e: any) {
-        console.error(e);
         res.status(500).json({ error: e.message });
     }
 });
@@ -338,7 +412,6 @@ app.post('/api/extensions', authenticateJWT, requireAdmin, async (req, res) => {
         }
         res.json({ success: true });
     } catch (e: any) {
-        console.error("Extension Error:", e);
         res.status(500).json({ error: e.message });
     }
 });
@@ -361,14 +434,12 @@ app.get('/api/rpc', authenticateJWT, async (req, res) => {
 app.post('/api/rpc/:functionName', authenticateJWT, async (req, res) => {
     const { functionName } = req.params;
     const params = req.body; 
-    
     try {
         const values = Object.values(params || {});
         const placeholders = values.map((_, i) => `$${i + 1}`).join(',');
         const result = await pool.query(`SELECT * FROM "${functionName}"(${placeholders})`, values);
         res.json(result.rows);
     } catch (e: any) {
-        console.error("RPC Error:", e);
         res.status(400).json({ error: e.message });
     }
 });
@@ -376,12 +447,18 @@ app.post('/api/rpc/:functionName', authenticateJWT, async (req, res) => {
 app.post('/api/sql', authenticateJWT, requireAdmin, async (req, res) => {
   const { query } = req.body;
   if (!query) return res.status(400).json({ error: "Query required" });
-  
   try {
     const result = await pool.query(query);
-    res.json({ rows: result.rows, rowCount: result.rowCount, command: result.command });
+    // Determine if a function was created to notify frontend
+    const isFunctionCreate = /CREATE\s+(OR\s+REPLACE\s+)?FUNCTION/i.test(query);
+    
+    res.json({ 
+        rows: result.rows, 
+        rowCount: result.rowCount, 
+        command: result.command,
+        createdFunction: isFunctionCreate // Flag for frontend redirection
+    });
   } catch (e: any) {
-    console.error("SQL Error:", e);
     res.status(400).json({ error: e.message });
   }
 });
