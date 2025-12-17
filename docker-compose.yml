@@ -38,10 +38,12 @@ services:
       DATABASE_URL: postgres://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME}
       REDIS_URL: redis://redis:6379
       JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRY: ${JWT_EXPIRY}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
       CALLBACK_URL: ${CALLBACK_URL}
       FRONTEND_URL: ${FRONTEND_URL}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS}
     depends_on:
       postgres:
         condition: service_healthy
@@ -74,6 +76,11 @@ services:
     restart: always
     ports:
       - "${PORT}:80"
+    environment:
+      # These variables are used by 20-envsubst-on-templates.sh in the nginx container
+      # to dynamically replace ${DOMAIN_NAME} in nginx.conf
+      DOMAIN_NAME: ${DOMAIN_NAME}
+      API_DOMAIN_NAME: ${API_DOMAIN_NAME}
     depends_on:
       - api
     networks:

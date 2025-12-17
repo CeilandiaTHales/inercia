@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Table, Database, Shield, LogOut, Terminal } from 'lucide-react';
+import { LayoutDashboard, Table, Database, Shield, LogOut, Terminal, PlusSquare, Blocks, Zap } from 'lucide-react';
 
 const Sidebar = () => {
   const location = useLocation();
@@ -23,13 +23,31 @@ const Sidebar = () => {
             <LayoutDashboard size={20} />
             <span className="font-medium">Dashboard</span>
           </Link>
+          
+          <div className="pt-4 pb-2 px-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">Database</div>
+          
           <Link to="/tables" className={`flex items-center gap-3 px-4 py-3 rounded-l-md transition-colors ${isActive('/tables')}`}>
             <Table size={20} />
-            <span className="font-medium">Table Editor</span>
+            <span className="font-medium">Browser</span>
           </Link>
+          <Link to="/tables/new" className={`flex items-center gap-3 px-4 py-3 rounded-l-md transition-colors ${isActive('/tables/new')}`}>
+            <PlusSquare size={20} />
+            <span className="font-medium">Table Builder</span>
+          </Link>
+          <Link to="/extensions" className={`flex items-center gap-3 px-4 py-3 rounded-l-md transition-colors ${isActive('/extensions')}`}>
+            <Blocks size={20} />
+            <span className="font-medium">Extensions</span>
+          </Link>
+
+          <div className="pt-4 pb-2 px-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">Logic & API</div>
+
           <Link to="/sql" className={`flex items-center gap-3 px-4 py-3 rounded-l-md transition-colors ${isActive('/sql')}`}>
             <Database size={20} />
             <span className="font-medium">SQL Editor</span>
+          </Link>
+           <Link to="/rpc" className={`flex items-center gap-3 px-4 py-3 rounded-l-md transition-colors ${isActive('/rpc')}`}>
+            <Zap size={20} />
+            <span className="font-medium">RPC / Functions</span>
           </Link>
           <Link to="/auth" className={`flex items-center gap-3 px-4 py-3 rounded-l-md transition-colors ${isActive('/auth')}`}>
             <Shield size={20} />
