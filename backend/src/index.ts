@@ -49,7 +49,6 @@ const setupSystem = async () => {
         `);
 
         // 4. CRITICAL: Create Native Postgres Roles for RLS
-        // This fixes 'role "authenticated" does not exist'
         const rolesQuery = `
             DO $$
             BEGIN
@@ -79,8 +78,7 @@ const setupSystem = async () => {
         `;
         await pool.query(rolesQuery);
 
-        // 5. CRITICAL: Create Auth Helper Functions (Supabase-style)
-        // This allows 'auth.uid() = user_id' to work in policies
+        // 5. CRITICAL: Create Auth Helper Functions
         await pool.query(`
             CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid AS $$
             SELECT NULLIF(current_setting('inercia.user_id', true), '')::uuid;
@@ -290,7 +288,6 @@ app.post('/api/auth/register', authenticateJWT, requireAdmin, async (req, res) =
   } catch (e: any) { res.status(500).json({ error: "Registration failed" }); }
 });
 
-// PROVIDERS
 app.get('/api/auth/providers', authenticateJWT, requireAdmin, async (req, res) => {
     try { const r = await pool.query("SELECT id, client_id, client_secret, enabled, updated_at FROM auth.providers"); res.json(r.rows); } catch (e:any) { res.status(500).json({error: e.message}); }
 });
@@ -303,13 +300,23 @@ app.post('/api/auth/providers', authenticateJWT, requireAdmin, async (req, res) 
     } catch (e:any) { res.status(500).json({error: e.message}); }
 });
 
-// CRUD & DATA (With limited RLS Context for now - Full enforcement happens when user connects via SDK)
+// CRUD & DATA
 app.get('/api/tables', authenticateJWT, async (req, res) => {
   try {
     const result = await pool.query(`SELECT table_schema, table_name FROM information_schema.tables WHERE table_schema NOT IN ('information_schema', 'pg_catalog', 'inercia_sys') ORDER BY table_schema, table_name`);
     res.json(result.rows);
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
+
+app.post('/api/tables/rename', authenticateJWT, requireAdmin, async (req, res) => {
+    const { schema, oldName, newName } = req.body;
+    try {
+        if (!/^[a-zA-Z0-9_]+$/.test(oldName) || !/^[a-zA-Z0-9_]+$/.test(newName)) return res.status(400).json({ error: "Invalid name" });
+        await pool.query(`ALTER TABLE "${schema}"."${oldName}" RENAME TO "${newName}"`);
+        res.json({ success: true });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/tables/:schema/:table/meta', authenticateJWT, async (req, res) => {
     const { schema, table } = req.params;
     if (!/^[a-zA-Z0-9_]+$/.test(schema) || !/^[a-zA-Z0-9_]+$/.test(table)) return res.status(400).json({ error: "Invalid" });
@@ -370,45 +377,34 @@ app.put('/api/files/:id', authenticateJWT, requireAdmin, async (req, res) => {
     try { await pool.query(`UPDATE inercia_sys.files SET content = $1, updated_at = NOW() WHERE id = $2`, [content, id]); res.json({success:true}); } catch(e:any) { res.status(500).json({error:e.message}); }
 });
 
-// --- RLS POLICIES (CORRECTED & AGGRESSIVE) ---
+// --- RLS POLICIES ---
 app.get('/api/policies', authenticateJWT, async (req, res) => {
-    const r = await pool.query('SELECT * FROM pg_policies'); res.json(r.rows);
+    // Return empty array if error to prevent frontend crash
+    try { const r = await pool.query('SELECT * FROM pg_policies'); res.json(r.rows); } catch(e) { res.json([]); }
 });
 
 app.post('/api/policies', authenticateJWT, requireAdmin, async (req, res) => {
     const { table, role, command, expression, schema } = req.body;
-    
-    // VALIDATE ROLES: Ensure they are mapped correctly
     const validRoles = ['authenticated', 'anon', 'service_role', 'public'];
-    if (!validRoles.includes(role)) {
-        return res.status(400).json({ error: `Invalid role '${role}'. Must be one of: ${validRoles.join(', ')}` });
-    }
+    if (!validRoles.includes(role)) return res.status(400).json({ error: `Invalid role` });
 
     try {
         const policyName = `policy_${table}_${command}_${Date.now()}`;
-        
-        // Force RLS on the table first (Aggressive Security)
         await pool.query(`ALTER TABLE "${schema}"."${table}" ENABLE ROW LEVEL SECURITY`);
-
         let sql = `CREATE POLICY "${policyName}" ON "${schema}"."${table}" FOR ${command} TO ${role}`;
-        
         if (['SELECT', 'DELETE'].includes(command.toUpperCase())) sql += ` USING (${expression});`;
         else if (command.toUpperCase() === 'INSERT') sql += ` WITH CHECK (${expression});`;
         else sql += ` USING (${expression}) WITH CHECK (${expression});`;
-
         await pool.query(sql);
         res.json({ success: true });
-    } catch(e: any) { 
-        console.error("Policy Error:", e.message);
-        res.status(500).json({ error: e.message }); 
-    }
+    } catch(e: any) { res.status(500).json({ error: e.message }); }
 });
 
 app.delete('/api/policies', authenticateJWT, requireAdmin, async (req, res) => {
     try { await pool.query(`DROP POLICY IF EXISTS "${req.body.name}" ON "${req.body.schema}"."${req.body.table}"`); res.json({ success: true }); } catch(e: any) { res.status(500).json({ error: e.message }); }
 });
 
-// Other endpoints (RPC, SQL, Schemas, etc)
+// Other endpoints
 app.post('/api/import/csv', authenticateJWT, requireAdmin, async (req, res) => {
     const { schema, table, rows, createTable } = req.body;
     if (!rows || rows.length === 0) return res.status(400).json({ error: "Empty CSV" });
@@ -448,10 +444,35 @@ app.put('/api/schemas/:name', authenticateJWT, requireAdmin, async (req, res) =>
 app.delete('/api/schemas/:name', authenticateJWT, requireAdmin, async (req, res) => { try { await pool.query(`DROP SCHEMA "${req.params.name}" CASCADE`); res.json({ success: true }); } catch (e: any) { res.status(500).json({ error: e.message }); } });
 app.get('/api/rpc', authenticateJWT, async (req, res) => { try { const r = await pool.query(`SELECT n.nspname as schema, p.proname as name, pg_get_function_arguments(p.oid) as args, pg_get_functiondef(p.oid) as def FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND p.proname NOT LIKE 'pg_%' AND p.proname NOT LIKE 'uuid_%' ORDER BY n.nspname, p.proname;`); res.json(r.rows); } catch (e: any) { res.status(500).json({ error: e.message }); } });
 app.post('/api/rpc/:functionName', authenticateJWT, async (req, res) => { try { const values = Object.values(req.body || {}); const placeholders = values.map((_, i) => `$${i + 1}`).join(','); const r = await pool.query(`SELECT * FROM "${req.params.functionName}"(${placeholders})`, values); res.json(r.rows); } catch (e: any) { res.status(400).json({ error: e.message }); } });
-app.post('/api/sql', authenticateJWT, requireAdmin, async (req, res) => { try { const result = await pool.query(req.body.query); const isFunctionCreate = /CREATE\s+(OR\s+REPLACE\s+)?FUNCTION/i.test(req.body.query); res.json({ rows: result.rows, rowCount: result.rowCount, command: result.command, createdFunction: isFunctionCreate }); } catch (e: any) { res.status(400).json({ error: e.message }); } });
+app.post('/api/sql', authenticateJWT, requireAdmin, async (req, res) => { 
+    try { 
+        const { query, schema } = req.body;
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            if(schema) {
+                // Set implicit search path to user selected schema first, then public
+                await client.query(`SET search_path TO "${schema}", public`);
+            }
+            const result = await client.query(query);
+            await client.query('COMMIT');
+            const isFunctionCreate = /CREATE\s+(OR\s+REPLACE\s+)?FUNCTION/i.test(query); 
+            res.json({ rows: result.rows, rowCount: result.rowCount, command: result.command, createdFunction: isFunctionCreate }); 
+        } catch(e: any) {
+            await client.query('ROLLBACK');
+            throw e;
+        } finally {
+            client.release();
+        }
+    } catch (e: any) { res.status(400).json({ error: e.message }); } 
+});
 app.get('/api/users', authenticateJWT, requireAdmin, async (req, res) => { const r = await pool.query('SELECT id, email, role, provider, created_at FROM auth.users ORDER BY created_at DESC LIMIT 100'); res.json(r.rows); });
 app.delete('/api/users/:id', authenticateJWT, requireAdmin, async (req, res) => { await pool.query('DELETE FROM auth.users WHERE id = $1', [req.params.id]); res.json({success:true}); });
 app.post('/api/tables/create', authenticateJWT, requireAdmin, async (req, res) => { const { name, schema, columns } = req.body; try { let sql = `CREATE TABLE "${schema||'public'}"."${name}" (id UUID PRIMARY KEY DEFAULT uuid_generate_v4(), created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()`; for (const col of columns) sql += `, "${col.name}" ${col.type} ${col.nullable ? '' : 'NOT NULL'}`; sql += `);`; await pool.query(sql); res.json({ success: true }); } catch (e: any) { res.status(500).json({ error: e.message }); } });
+app.post('/api/tables/delete', authenticateJWT, requireAdmin, async (req, res) => {
+    const { schema, table } = req.body;
+    try { await pool.query(`DROP TABLE IF EXISTS "${schema}"."${table}" CASCADE`); res.json({success: true}); } catch(e: any) { res.status(500).json({error: e.message}); }
+});
 app.get('/api/extensions', authenticateJWT, requireAdmin, async (req, res) => { try { const installed = await pool.query('SELECT extname FROM pg_extension'); const available = await pool.query('SELECT name, comment FROM pg_available_extensions ORDER BY name'); const installedSet = new Set(installed.rows.map(r => r.extname)); res.json(available.rows.map(ext => ({name: ext.name, description: ext.comment, installed: installedSet.has(ext.name)}))); } catch (e: any) { res.status(500).json({ error: e.message }); } });
 app.post('/api/extensions', authenticateJWT, requireAdmin, async (req, res) => { try { const query = req.body.action === 'install' ? `CREATE EXTENSION IF NOT EXISTS "${req.body.name}" CASCADE` : `DROP EXTENSION IF EXISTS "${req.body.name}"`; await pool.query(query); res.json({ success: true }); } catch (e: any) { res.status(500).json({ error: e.message }); } });
 

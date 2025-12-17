@@ -26,10 +26,11 @@ const AuthManager = () => {
   }, []);
 
   const refresh = () => {
-      api.get('/users').then(setUsers).catch(console.error);
-      api.get('/policies').then(setPolicies).catch(console.error);
+      api.get('/users').then(data => setUsers(Array.isArray(data) ? data : [])).catch(() => setUsers([]));
+      api.get('/policies').then(data => setPolicies(Array.isArray(data) ? data : [])).catch(() => setPolicies([]));
       api.get('/tables').then(setTables).catch(console.error);
       api.get('/auth/providers').then((data) => {
+          if(!Array.isArray(data)) return;
           setProviders(data);
           const g = data.find((p:any) => p.id === 'google');
           if(g) setGoogleConfig({ client_id: g.client_id, client_secret: g.client_secret, enabled: g.enabled });

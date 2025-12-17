@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { api } from '../api';
-import { Plus, Trash2, Edit2, Save, X, Search, Upload, FilePlus, GripHorizontal } from 'lucide-react';
+import { Plus, Trash2, Edit2, Save, X, Search, Upload, FilePlus, GripHorizontal, Copy, Pencil } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
 
 const TableEditor = () => {
@@ -36,7 +36,22 @@ const TableEditor = () => {
   const [manualTableName, setManualTableName] = useState('');
   const [manualCols, setManualCols] = useState([{ name: 'name', type: 'text', nullable: true }]);
 
+  // CONTEXT MENU STATE
+  const [contextMenu, setContextMenu] = useState<{x:number, y:number, table: any} | null>(null);
+  const [showRenameModal, setShowRenameModal] = useState(false);
+  const [renameTarget, setRenameTarget] = useState<any>(null);
+  const [newName, setNewName] = useState('');
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState<any>(null); // holds table obj to delete
+  const [deleteConfirmationName, setDeleteConfirmationName] = useState('');
+
   useEffect(() => { refreshTables(); }, []);
+  
+  useEffect(() => {
+    const close = () => setContextMenu(null);
+    window.addEventListener('click', close);
+    return () => window.removeEventListener('click', close);
+  }, []);
+
   const refreshTables = () => api.get('/tables').then(setTables).catch(console.error);
 
   const fetchTableData = async (schema: string, table: string) => {
@@ -47,11 +62,10 @@ const TableEditor = () => {
     try {
         const meta = await api.get(`/tables/${schema}/${table}/meta`);
         setColumns(meta);
-        setOrderedColumns(meta); // Initialize order
+        setOrderedColumns(meta); 
         
-        // Initialize default widths if not set
         const initialWidths: Record<string, number> = {};
-        meta.forEach((c: any) => initialWidths[c.column_name] = 150); // Default 150px
+        meta.forEach((c: any) => initialWidths[c.column_name] = 150);
         setColWidths(prev => ({ ...initialWidths, ...prev }));
 
         const res = await api.get(`/tables/${schema}/${table}/data`);
@@ -61,9 +75,71 @@ const TableEditor = () => {
     finally { setLoading(false); }
   };
 
+  // --- Context Menu Handlers ---
+  const handleContextMenu = (e: React.MouseEvent, table: any) => {
+      e.preventDefault();
+      setContextMenu({ x: e.clientX, y: e.clientY, table });
+  };
+
+  const handleCopyName = () => {
+      if(contextMenu) navigator.clipboard.writeText(contextMenu.table.table_name);
+  };
+
+  const handleOpenRename = () => {
+      if(contextMenu) {
+          setRenameTarget(contextMenu.table);
+          setNewName(contextMenu.table.table_name);
+          setShowRenameModal(true);
+      }
+  };
+
+  const executeRename = async () => {
+      if(!renameTarget || !newName) return;
+      try {
+          await api.post('/tables/rename', { schema: renameTarget.table_schema, oldName: renameTarget.table_name, newName });
+          refreshTables();
+          if(selectedTable?.table === renameTarget.table_name) {
+              setSelectedTable(null); // Deselect if renamed active table
+          }
+          setShowRenameModal(false);
+      } catch(e:any) { alert(e.message); }
+  };
+
+  const handleDeleteRequest = async () => {
+      if(!contextMenu) return;
+      const t = contextMenu.table;
+      // Fetch count to decide logic
+      try {
+          const res = await api.get(`/tables/${t.table_schema}/${t.table_name}/data?limit=6`); // Just need to know if > 5
+          const count = res.data.length;
+          if (count > 5) {
+              setShowDeleteConfirm(t);
+              setDeleteConfirmationName('');
+          } else {
+              if(confirm(`Tem certeza que deseja excluir a tabela "${t.table_name}"?`)) {
+                  await api.post('/tables/delete', { schema: t.table_schema, table: t.table_name });
+                  refreshTables();
+                  if(selectedTable?.table === t.table_name) setSelectedTable(null);
+              }
+          }
+      } catch(e) { console.error(e); }
+  };
+
+  const executeDelete = async () => {
+      if(!showDeleteConfirm) return;
+      if(deleteConfirmationName !== showDeleteConfirm.table_name) return;
+      try {
+          await api.post('/tables/delete', { schema: showDeleteConfirm.table_schema, table: showDeleteConfirm.table_name });
+          refreshTables();
+          if(selectedTable?.table === showDeleteConfirm.table_name) setSelectedTable(null);
+          setShowDeleteConfirm(null);
+      } catch(e:any) { alert(e.message); }
+  };
+
+
   // --- Column Resizing Logic ---
   const startResizing = (e: React.MouseEvent, colName: string) => {
-      e.stopPropagation(); // Prevent drag start
+      e.stopPropagation(); 
       resizingCol.current = colName;
       const startX = e.clientX;
       const startWidth = colWidths[colName] || 150;
@@ -71,33 +147,26 @@ const TableEditor = () => {
       const onMouseMove = (moveEvent: MouseEvent) => {
           if (resizingCol.current) {
               const diff = moveEvent.clientX - startX;
-              const newWidth = Math.max(50, startWidth + diff); // Min 50px
+              const newWidth = Math.max(50, startWidth + diff); 
               setColWidths(prev => ({ ...prev, [colName]: newWidth }));
           }
       };
-
       const onMouseUp = () => {
           resizingCol.current = null;
           document.removeEventListener('mousemove', onMouseMove);
           document.removeEventListener('mouseup', onMouseUp);
       };
-
       document.addEventListener('mousemove', onMouseMove);
       document.addEventListener('mouseup', onMouseUp);
   };
 
-  // --- Column Reordering Logic ---
   const handleDragStart = (e: React.DragEvent, position: number) => {
       dragItem.current = position;
-      // Required for Firefox
       e.dataTransfer.effectAllowed = "move"; 
-      // Add a ghost image or styling here if desired
   };
-
   const handleDragEnter = (e: React.DragEvent, position: number) => {
       dragOverItem.current = position;
   };
-
   const handleDragEnd = () => {
       if (dragItem.current !== null && dragOverItem.current !== null) {
           const newOrdered = [...orderedColumns];
@@ -110,7 +179,6 @@ const TableEditor = () => {
       dragOverItem.current = null;
   };
 
-  // ... (Import, Create, Date helpers remain same) ...
   const handleImport = async () => {
       if (!csvContent) return;
       try {
@@ -167,8 +235,45 @@ const TableEditor = () => {
   };
 
   return (
-    <div className="flex h-full w-full gap-2"> {/* Reduced gap to 2 for 'colada' feel */}
-       {/* Modals ... */}
+    <div className="flex h-full w-full gap-2 relative">
+       {/* Context Menu */}
+       {contextMenu && (
+           <div 
+             className="fixed bg-slate-800 border border-slate-600 rounded shadow-2xl py-1 z-[99] w-48 text-sm"
+             style={{ top: contextMenu.y, left: contextMenu.x }}
+             onClick={(e) => e.stopPropagation()}
+           >
+                <div className="px-4 py-2 border-b border-slate-700 text-xs text-slate-500 font-bold uppercase">{contextMenu.table.table_name}</div>
+                <button onClick={handleCopyName} className="w-full text-left px-4 py-2 text-slate-300 hover:bg-slate-700 flex items-center gap-2"><Copy size={14}/> Copiar Nome</button>
+                <button onClick={handleOpenRename} className="w-full text-left px-4 py-2 text-slate-300 hover:bg-slate-700 flex items-center gap-2"><Pencil size={14}/> Renomear</button>
+                <button onClick={handleDeleteRequest} className="w-full text-left px-4 py-2 text-red-400 hover:bg-slate-700 flex items-center gap-2"><Trash2 size={14}/> Excluir Tabela</button>
+           </div>
+       )}
+
+       {/* Rename Modal */}
+       {showRenameModal && (
+           <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+               <div className="bg-slate-900 border border-slate-700 rounded p-6 w-80">
+                   <h3 className="text-white font-bold mb-4">Renomear Tabela</h3>
+                   <input className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-white mb-4" value={newName} onChange={e => setNewName(e.target.value)} />
+                   <div className="flex justify-end gap-2"><button onClick={() => setShowRenameModal(false)} className="text-slate-400">Cancelar</button><button onClick={executeRename} className="bg-emerald-600 text-white px-4 py-2 rounded">Salvar</button></div>
+               </div>
+           </div>
+       )}
+
+       {/* Safe Delete Modal */}
+       {showDeleteConfirm && (
+           <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+               <div className="bg-slate-900 border border-slate-700 rounded p-6 w-96 shadow-2xl">
+                   <h3 className="text-white font-bold mb-2 text-red-500 flex items-center gap-2"><Trash2/> Atenção!</h3>
+                   <p className="text-slate-400 text-sm mb-4">Esta tabela contém muitos dados. Para evitar acidentes, digite o nome da tabela <b>"{showDeleteConfirm.table_name}"</b> para confirmar a exclusão.</p>
+                   <input className="w-full bg-slate-950 border border-slate-700 rounded p-2 text-white mb-4" placeholder={showDeleteConfirm.table_name} value={deleteConfirmationName} onChange={e => setDeleteConfirmationName(e.target.value)} />
+                   <div className="flex justify-end gap-2"><button onClick={() => setShowDeleteConfirm(null)} className="text-slate-400">Cancelar</button><button onClick={executeDelete} disabled={deleteConfirmationName !== showDeleteConfirm.table_name} className="bg-red-600 disabled:opacity-50 text-white px-4 py-2 rounded font-bold">Excluir Tabela</button></div>
+               </div>
+           </div>
+       )}
+
+       {/* Import Modal */}
        {showImportModal && (
           <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
             <div className="bg-slate-900 border border-slate-700 rounded-lg p-6 max-w-lg w-full shadow-2xl">
@@ -186,6 +291,7 @@ const TableEditor = () => {
             </div>
           </div>
       )}
+      {/* Create Modal */}
       {showCreateModal && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
             <div className="bg-slate-900 border border-slate-700 rounded-lg p-6 max-w-lg w-full">
@@ -231,6 +337,7 @@ const TableEditor = () => {
                  <button 
                     key={t.table_name} 
                     onClick={() => fetchTableData(t.table_schema, t.table_name)}
+                    onContextMenu={(e) => handleContextMenu(e, t)}
                     className={`w-full text-left px-3 py-2 rounded mb-1 text-xs flex items-center gap-2 ${selectedTable?.table === t.table_name ? 'bg-emerald-600 text-white shadow-md' : 'text-slate-300 hover:bg-slate-700'}`}
                  >
                     <span className="text-[10px] bg-slate-900 px-1 rounded text-slate-500">{t.table_schema.slice(0,3)}</span>
@@ -240,7 +347,7 @@ const TableEditor = () => {
           </div>
       </div>
 
-      {/* Main Data View - Occupies remaining space */}
+      {/* Main Data View */}
       <div className="flex-1 bg-slate-800 rounded-lg border border-slate-700 flex flex-col overflow-hidden h-full shadow-xl">
           {selectedTable ? (
               <>
@@ -272,7 +379,6 @@ const TableEditor = () => {
                                             <span className="truncate" title={c.column_name}>{c.column_name}</span>
                                             <span className="text-[9px] font-normal lowercase ml-1 text-slate-600">{c.data_type}</span>
                                         </div>
-                                        {/* Resize Handle */}
                                         <div 
                                             className="absolute right-0 top-0 bottom-0 w-1 hover:bg-emerald-500 cursor-col-resize z-30 transition-colors"
                                             onMouseDown={(e) => startResizing(e, c.column_name)}
