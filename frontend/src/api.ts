@@ -54,6 +54,38 @@ const handleResponse = async (res: Response) => {
     throw new Error(errorMessage || `Request failed with status ${res.status}`);
 };
 
+/**
+ * Robust Copy to Clipboard that works on HTTP (unsecured context)
+ * uses the legacy execCommand as fallback for navigator.clipboard
+ */
+export const copyToClipboard = async (text: string): Promise<void> => {
+    if (!navigator.clipboard) {
+        // Fallback for non-secure contexts (HTTP)
+        const textArea = document.createElement("textarea");
+        textArea.value = text;
+        textArea.style.position = "fixed";
+        textArea.style.left = "-9999px";
+        textArea.style.top = "0";
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        
+        return new Promise((resolve, reject) => {
+            try {
+                const successful = document.execCommand('copy');
+                document.body.removeChild(textArea);
+                if (successful) resolve();
+                else reject(new Error('Copy command failed'));
+            } catch (err) {
+                document.body.removeChild(textArea);
+                reject(err);
+            }
+        });
+    }
+    // Secure context
+    return navigator.clipboard.writeText(text);
+};
+
 export const api = {
   get: async (endpoint: string) => {
     // Ensure endpoint starts with slash if not provided

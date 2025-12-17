@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { api } from '../api';
-import { User, ShieldCheck, Plus, Trash2, Key, ToggleLeft, ToggleRight, Check, AlertTriangle } from 'lucide-react';
+import { api, copyToClipboard } from '../api';
+import { User, ShieldCheck, Plus, Trash2, Key, ToggleLeft, ToggleRight, Check, AlertTriangle, ChevronDown, ChevronRight, Copy } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
 
 const AuthManager = () => {
@@ -12,6 +12,9 @@ const AuthManager = () => {
   const [tables, setTables] = useState<any[]>([]);
   const [providers, setProviders] = useState<any[]>([]);
   const [config, setConfig] = useState<any>({ apiExternalUrl: '' });
+
+  // Policy Grouping State
+  const [expandedTables, setExpandedTables] = useState<Record<string, boolean>>({});
 
   const [showUserModal, setShowUserModal] = useState(false);
   const [showPolicyModal, setShowPolicyModal] = useState(false);
@@ -74,6 +77,20 @@ const AuthManager = () => {
       } catch (e: any) { alert(e.message); }
   };
 
+  const handleCopy = (text: string) => {
+      copyToClipboard(text).then(() => alert("Copiado!")).catch(e => alert("Erro ao copiar: " + e));
+  };
+
+  const toggleTable = (tableName: string) => {
+      setExpandedTables(prev => ({...prev, [tableName]: !prev[tableName]}));
+  }
+
+  // Group policies by table
+  const policiesByTable: Record<string, any[]> = {};
+  tables.forEach(t => {
+      policiesByTable[t.table_name] = policies.filter(p => p.tablename === t.table_name);
+  });
+
   return (
     <div className="space-y-6 h-full flex flex-col">
         <div className="flex space-x-1 bg-slate-800 p-1 rounded-lg w-fit border border-slate-700">
@@ -91,13 +108,16 @@ const AuthManager = () => {
                     </div>
                     <div className="space-y-2">
                         {users.map(u => (
-                            <div key={u.id} className="bg-slate-900 border border-slate-700 p-3 rounded flex justify-between items-center">
+                            <div key={u.id} className="bg-slate-900 border border-slate-700 p-3 rounded flex justify-between items-center group">
                                 <div>
-                                    <div className="text-white text-sm font-bold">{u.email}</div>
+                                    <div className="text-white text-sm font-bold flex items-center gap-2">
+                                        {u.email}
+                                        <button onClick={() => handleCopy(u.id)} title="Copiar ID" className="text-slate-600 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity"><Copy size={12}/></button>
+                                    </div>
                                     <div className="text-[10px] text-slate-500 uppercase flex gap-2">
                                         <span className="bg-slate-800 px-1 rounded">{u.role}</span>
                                         <span>{u.provider}</span>
-                                        <span>ID: {u.id}</span>
+                                        <span className="font-mono">{u.id}</span>
                                     </div>
                                 </div>
                                 <button className="text-slate-600 hover:text-red-400"><Trash2 size={16}/></button>
@@ -108,31 +128,63 @@ const AuthManager = () => {
             )}
 
             {activeTab === 'policies' && (
-                <div className="bg-slate-800 rounded-lg border border-slate-700 p-6 animate-fade-in">
-                    <div className="flex justify-between items-center mb-4">
+                <div className="animate-fade-in space-y-4">
+                    <div className="flex justify-between items-center">
                         <div>
                             <h2 className="text-xl font-bold text-white">Row Level Security (RLS)</h2>
                             <p className="text-sm text-slate-400">Proteja seus dados definindo quem pode acessar o quê.</p>
                         </div>
                         <button onClick={() => setShowPolicyModal(true)} className="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 rounded flex items-center gap-2 text-sm"><Plus size={16}/> Nova Regra</button>
                     </div>
-                    {policies.length === 0 && <p className="text-slate-500 text-sm text-center py-10 border-2 border-dashed border-slate-700 rounded">Nenhuma regra ativa. O acesso é negado por padrão quando o RLS é ativado.</p>}
-                    <div className="grid gap-3">
-                        {policies.map((p, i) => (
-                            <div key={i} className="bg-slate-900 border border-slate-700 p-4 rounded flex justify-between items-center group">
-                                <div>
-                                    <div className="text-white font-bold text-sm flex items-center gap-2">
-                                        {p.tablename} 
-                                        <span className="text-xs font-normal text-slate-500">({p.schemaname})</span>
+                    
+                    <div className="grid gap-4">
+                        {Object.keys(policiesByTable).sort().map(tableName => {
+                            const tablePolicies = policiesByTable[tableName];
+                            const isOpen = expandedTables[tableName];
+                            const rlsEnabled = tablePolicies.length > 0; // Simplified assumption, ideally check pg_class.relrowsecurity
+
+                            return (
+                                <div key={tableName} className="bg-slate-800 border border-slate-700 rounded-lg overflow-hidden">
+                                    <div 
+                                        className="p-4 bg-slate-850 flex items-center justify-between cursor-pointer hover:bg-slate-800 transition-colors"
+                                        onClick={() => toggleTable(tableName)}
+                                    >
+                                        <div className="flex items-center gap-3">
+                                            {isOpen ? <ChevronDown size={18} className="text-slate-500"/> : <ChevronRight size={18} className="text-slate-500"/>}
+                                            <span className="font-bold text-white">{tableName}</span>
+                                            {rlsEnabled ? 
+                                                <span className="text-[10px] bg-emerald-900/50 text-emerald-400 border border-emerald-900 px-2 py-0.5 rounded uppercase font-bold">Ativo</span> :
+                                                <span className="text-[10px] bg-slate-700 text-slate-400 px-2 py-0.5 rounded uppercase">Inativo</span>
+                                            }
+                                        </div>
+                                        <div className="text-xs text-slate-500">{tablePolicies.length} regras</div>
                                     </div>
-                                    <div className="text-xs text-slate-400 mt-1">
-                                        Permitir <span className="text-emerald-400 uppercase font-bold">{p.cmd}</span> para <span className="text-blue-400 font-mono font-bold">{p.roles.join(', ')}</span> se:
-                                    </div>
-                                    <code className="text-[11px] text-orange-300 bg-slate-950 px-1 py-0.5 rounded mt-1 block w-fit border border-slate-800">{p.qual} {p.with_check}</code>
+                                    
+                                    {isOpen && (
+                                        <div className="p-4 bg-slate-900/50 border-t border-slate-700 space-y-2">
+                                            {tablePolicies.length === 0 ? (
+                                                <p className="text-slate-500 text-sm italic">Nenhuma regra. O acesso é totalmente aberto (se RLS desativado) ou fechado (se ativado sem políticas).</p>
+                                            ) : (
+                                                tablePolicies.map((p, i) => (
+                                                    <div key={i} className="bg-slate-950 border border-slate-800 p-3 rounded flex justify-between items-center group">
+                                                        <div>
+                                                            <div className="text-emerald-400 font-bold text-sm mb-1">{p.policyname}</div>
+                                                            <div className="text-xs text-slate-400">
+                                                                Permitir <span className="text-white font-bold">{p.cmd}</span> para <span className="text-blue-400 font-mono font-bold">{(p.roles || []).join(', ') || 'PUBLIC'}</span>
+                                                            </div>
+                                                            <div className="mt-1 font-mono text-[10px] text-slate-500">
+                                                                USING ({p.qual || 'true'}) {p.with_check ? `WITH CHECK (${p.with_check})` : ''}
+                                                            </div>
+                                                        </div>
+                                                        <button onClick={() => deletePolicy(p)} className="text-slate-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 size={16}/></button>
+                                                    </div>
+                                                ))
+                                            )}
+                                        </div>
+                                    )}
                                 </div>
-                                <button onClick={() => deletePolicy(p)} className="text-slate-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"><Trash2 size={16}/></button>
-                            </div>
-                        ))}
+                            );
+                        })}
                     </div>
                 </div>
             )}
@@ -153,7 +205,10 @@ const AuthManager = () => {
                         </div>
                         <div className="mt-4 bg-slate-900 p-3 rounded border border-slate-700">
                              <p className="text-xs text-slate-400 mb-1">Callback URL:</p>
-                             <code className="text-xs text-blue-400 select-all block break-all">{config.apiExternalUrl ? `${config.apiExternalUrl}/api/auth/google/callback` : 'Carregando URL...'}</code>
+                             <div className="flex justify-between items-center">
+                                 <code className="text-xs text-blue-400 select-all block break-all">{config.apiExternalUrl ? `${config.apiExternalUrl}/api/auth/google/callback` : 'Carregando URL...'}</code>
+                                 <button onClick={() => handleCopy(`${config.apiExternalUrl}/api/auth/google/callback`)} className="text-slate-500 hover:text-white"><Copy size={14}/></button>
+                             </div>
                         </div>
                         <div className="mt-6 flex justify-end"><button onClick={saveGoogleConfig} className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded text-sm font-bold flex items-center gap-2"><Check size={16}/> Salvar Configuração</button></div>
                     </div>

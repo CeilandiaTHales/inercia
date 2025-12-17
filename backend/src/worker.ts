@@ -57,7 +57,7 @@ worker.on('ready', () => {
 });
 
 // Graceful shutdown
-process.on('SIGTERM', async () => {
+(process as any).on('SIGTERM', async () => {
   console.log('SIGTERM signal received: closing worker');
   await worker.close();
 });

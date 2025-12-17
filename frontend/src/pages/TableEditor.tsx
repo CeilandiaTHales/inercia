@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { api } from '../api';
+import { api, copyToClipboard } from '../api';
 import { Plus, Trash2, Edit2, Save, X, Search, Upload, FilePlus, GripHorizontal, Copy, Pencil, Download, CheckSquare, Square, Layers } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
 
@@ -109,10 +109,16 @@ const TableEditor = () => {
       setContextMenu({ x: e.clientX, y: e.clientY, table });
   };
 
+  const handleCopy = (text: string) => {
+      copyToClipboard(text)
+        .then(() => alert("Copiado!"))
+        .catch(err => alert("Erro ao copiar: " + err));
+  };
+
   const handleCopyName = (e: React.MouseEvent) => {
       e.stopPropagation();
       if(contextMenu) {
-          navigator.clipboard.writeText(contextMenu.table.table_name);
+          handleCopy(contextMenu.table.table_name);
           setContextMenu(null);
       }
   };
@@ -120,7 +126,7 @@ const TableEditor = () => {
   const handleCopySchema = (e: React.MouseEvent) => {
       e.stopPropagation();
       if(contextMenu) {
-          navigator.clipboard.writeText(contextMenu.table.table_schema);
+          handleCopy(contextMenu.table.table_schema);
           setContextMenu(null);
       }
   };
@@ -202,8 +208,8 @@ const TableEditor = () => {
           headers.join(','),
           ...selectedData.map(row => headers.map(fieldName => JSON.stringify(row[fieldName])).join(','))
       ].join('\n');
-      navigator.clipboard.writeText(csv);
-      alert(`${selectedData.length} rows copied to clipboard as CSV!`);
+      
+      handleCopy(csv);
   };
 
   const handleBulkDeleteInit = () => {

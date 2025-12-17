@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { api } from '../api';
+import { api, copyToClipboard } from '../api';
 import { Folder, FileCode, Play, Plus, ChevronRight, ChevronDown, FolderPlus, FileText, Trash2, Edit2, Save, Search, Zap, ArrowRight, Eye, EyeOff, Copy, Terminal, CheckCircle } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
 
@@ -244,8 +244,7 @@ const LogicEditor = () => {
   -H "Content-Type: application/json" \\
   -d '${testParams.replace(/'/g, "'\\''")}'`;
       
-      navigator.clipboard.writeText(curl);
-      showToast("cURL copiado com chaves API!");
+      copyToClipboard(curl).then(() => showToast("cURL copiado com chaves API!")).catch(() => showToast("Erro ao copiar", 'error'));
   };
 
   // ... Trigger handlers ... (No changes needed)

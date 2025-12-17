@@ -273,6 +273,34 @@ app.get('/api/auth/keys', authenticateJWT, requireAdmin, (req, res) => {
     res.json({ anon: anonKey, service: serviceKey });
 });
 
+// SYSTEM CONNECTION INFO (ADMIN ONLY)
+app.get('/api/admin/connection-info', authenticateJWT, requireAdmin, (req, res) => {
+    const dbUrl = process.env.DATABASE_URL || '';
+    // Parse standard postgres connection string: postgres://user:pass@host:port/db
+    // This is a naive parser but works for standard setups
+    let dbInfo = { user: '', password: '', host: '', port: '5432', database: '' };
+    try {
+        const url = new URL(dbUrl);
+        dbInfo = {
+            user: url.username,
+            password: url.password,
+            host: url.hostname,
+            port: url.port || '5432',
+            database: url.pathname.substring(1)
+        };
+    } catch(e) {}
+
+    res.json({
+        database: {
+            url: dbUrl,
+            ...dbInfo
+        },
+        redis: {
+            url: process.env.REDIS_URL || ''
+        }
+    });
+});
+
 app.get('/api/auth/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
 app.get('/api/auth/google/callback', passport.authenticate('google', { session: false }), (req: any, res) => {
     const token = jwt.sign(
