@@ -2,9 +2,11 @@ import React, { useEffect, useState, useRef } from 'react';
 import { api, copyToClipboard } from '../api';
 import { Plus, Trash2, Edit2, Save, X, Search, Upload, FilePlus, GripHorizontal, Copy, Pencil, Download, CheckSquare, Square, Layers } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
+import { useToast } from '../contexts/ToastContext';
 
 const TableEditor = () => {
   const { t } = useLanguage();
+  const { showToast } = useToast();
   const [tables, setTables] = useState<any[]>([]);
   const [selectedTable, setSelectedTable] = useState<any>(null);
   const [rows, setRows] = useState<any[]>([]);
@@ -111,8 +113,8 @@ const TableEditor = () => {
 
   const handleCopy = (text: string) => {
       copyToClipboard(text)
-        .then(() => alert("Copiado!"))
-        .catch(err => alert("Erro ao copiar: " + err));
+        .then(() => showToast("Copiado!"))
+        .catch(err => showToast("Erro ao copiar", 'error'));
   };
 
   const handleCopyName = (e: React.MouseEvent) => {
@@ -126,6 +128,7 @@ const TableEditor = () => {
   const handleCopySchema = (e: React.MouseEvent) => {
       e.stopPropagation();
       if(contextMenu) {
+          // Use table_schema from the table object
           handleCopy(contextMenu.table.table_schema);
           setContextMenu(null);
       }
@@ -148,7 +151,8 @@ const TableEditor = () => {
               setSelectedTable(null); 
           }
           setShowRenameModal(false);
-      } catch(e:any) { alert(e.message); }
+          showToast("Renomeado com sucesso!");
+      } catch(e:any) { showToast(e.message, 'error'); }
   };
 
   const handleDeleteRequest = async () => {
@@ -165,6 +169,7 @@ const TableEditor = () => {
                   await api.post('/tables/delete', { schema: t.table_schema, table: t.table_name });
                   refreshTables();
                   if(selectedTable?.table === t.table_name) setSelectedTable(null);
+                  showToast("Tabela excluída.");
               }
           }
       } catch(e) { console.error(e); }
@@ -178,7 +183,8 @@ const TableEditor = () => {
           refreshTables();
           if(selectedTable?.table === showDeleteConfirm.table_name) setSelectedTable(null);
           setShowDeleteConfirm(null);
-      } catch(e:any) { alert(e.message); }
+          showToast("Tabela excluída.");
+      } catch(e:any) { showToast(e.message, 'error'); }
   };
 
 
@@ -228,8 +234,9 @@ const TableEditor = () => {
           // Refresh data
           fetchTableData(selectedTable.schema, selectedTable.table);
           setShowBulkDelete(false);
+          showToast(`${selectedIds.size} linhas excluídas.`);
       } catch(e: any) {
-          alert(e.message);
+          showToast(e.message, 'error');
       }
   };
 
@@ -290,16 +297,16 @@ const TableEditor = () => {
           });
           const targetTable = csvMode === 'new' ? newTableName : selectedTable?.table;
           const targetSchema = csvMode === 'new' ? 'public' : selectedTable?.schema;
-          if (!targetTable) return alert("Table name required");
+          if (!targetTable) return showToast("Table name required", 'error');
           await api.post(`/import/csv`, { schema: targetSchema, table: targetTable, rows: rowsToInsert, createTable: csvMode === 'new' });
           setShowImportModal(false); setCsvContent(''); setNewTableName(''); refreshTables();
           if (csvMode === 'existing') fetchTableData(targetSchema, targetTable);
-          alert('Import Successful!');
-      } catch (e: any) { alert("Import failed: " + e.message); }
+          showToast('Importado com sucesso!');
+      } catch (e: any) { showToast("Falha na importação: " + e.message, 'error'); }
   };
 
   const createManualTable = async () => {
-      try { await api.post('/tables/create', { name: manualTableName, columns: manualCols }); setShowCreateModal(false); setManualTableName(''); setManualCols([{ name: 'name', type: 'text', nullable: true }]); refreshTables(); } catch(e: any) { alert(e.message); }
+      try { await api.post('/tables/create', { name: manualTableName, columns: manualCols }); setShowCreateModal(false); setManualTableName(''); setManualCols([{ name: 'name', type: 'text', nullable: true }]); refreshTables(); showToast("Tabela criada!"); } catch(e: any) { showToast(e.message, 'error'); }
   };
 
   const formatDateForInput = (isoString: string) => {
@@ -317,11 +324,13 @@ const TableEditor = () => {
           if (isAdding) {
               const newRow = await api.post(`/tables/${schema}/${table}/data`, formData);
               setRows([...rows, newRow]); setIsAdding(false);
+              showToast("Linha criada!");
           } else if (editingId) {
               const updated = await api.put(`/tables/${schema}/${table}/data/${editingId}?pk=${pk}`, formData);
               setRows(rows.map(r => r[pk] === editingId ? updated : r)); setEditingId(null);
+              showToast("Salvo!");
           }
-      } catch(e:any) { alert(e.message); }
+      } catch(e:any) { showToast(e.message, 'error'); }
   };
 
   const deleteRow = async (id: string) => {
@@ -329,6 +338,7 @@ const TableEditor = () => {
       const { schema, table } = selectedTable;
       await api.delete(`/tables/${schema}/${table}/data/${id}?pk=${pk}`);
       setRows(rows.filter(r => r[pk] !== id));
+      showToast("Deletado.");
   };
 
   // Determine if Gap Fill is applicable (simple check for integer pk)

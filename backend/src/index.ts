@@ -291,12 +291,14 @@ app.get('/api/admin/connection-info', authenticateJWT, requireAdmin, (req, res) 
     } catch(e) {}
 
     res.json({
+        apiUrl: process.env.API_EXTERNAL_URL || 'http://localhost:3000',
         database: {
             url: dbUrl,
             ...dbInfo
         },
         redis: {
-            url: process.env.REDIS_URL || ''
+            url: process.env.REDIS_URL || '',
+            password: process.env.REDIS_PASSWORD || ''
         }
     });
 });

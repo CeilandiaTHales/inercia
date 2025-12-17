@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client'
 import App from './App'
 import './index.css' 
 import { LanguageProvider } from './contexts/LanguageContext';
+import { ToastProvider } from './contexts/ToastContext';
 
 const root = document.getElementById('root');
 
@@ -13,7 +14,9 @@ if (!root) {
 ReactDOM.createRoot(root).render(
   <React.StrictMode>
     <LanguageProvider>
-      <App />
+      <ToastProvider>
+        <App />
+      </ToastProvider>
     </LanguageProvider>
   </React.StrictMode>,
 )

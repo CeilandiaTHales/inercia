@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { api, copyToClipboard } from '../api';
 import { Folder, FileCode, Play, Plus, ChevronRight, ChevronDown, FolderPlus, FileText, Trash2, Edit2, Save, Search, Zap, ArrowRight, Eye, EyeOff, Copy, Terminal, CheckCircle } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
+import { useToast } from '../contexts/ToastContext';
 
 interface TreeItem {
     id?: string;
@@ -16,6 +17,7 @@ interface TreeItem {
 
 const LogicEditor = () => {
   const { t } = useLanguage();
+  const { showToast } = useToast();
   const [activeTab, setActiveTab] = useState<'code' | 'triggers'>('code');
 
   // CODE EDITOR STATE
@@ -33,9 +35,6 @@ const LogicEditor = () => {
   const [testResult, setTestResult] = useState<any>(null);
   const [testing, setTesting] = useState(false);
   
-  // TOAST NOTIFICATION
-  const [toast, setToast] = useState<{msg: string, type: 'success'|'error'} | null>(null);
-
   // TRIGGERS STATE
   const [triggers, setTriggers] = useState<any[]>([]);
   const [tables, setTables] = useState<any[]>([]);
@@ -65,12 +64,6 @@ const LogicEditor = () => {
     return () => window.removeEventListener('click', close);
   }, []);
 
-  // Toast Helper
-  const showToast = (msg: string, type: 'success'|'error' = 'success') => {
-      setToast({ msg, type });
-      setTimeout(() => setToast(null), 3000);
-  };
-
   const fetchKeys = async () => {
       try {
           const k = await api.get('/auth/keys');
@@ -89,11 +82,16 @@ const LogicEditor = () => {
         setFuncsList(funcs);
 
         const root: Record<string, TreeItem[]> = {};
+        
+        // Setup schemas including 'public' but excluding system internals
         schemas.forEach((s: any) => {
-             if (!['inercia_sys', 'public', 'auth', 'pg_catalog', 'information_schema'].includes(s.name)) {
+             if (!['inercia_sys', 'auth', 'pg_catalog', 'information_schema'].includes(s.name)) {
                  if(!root[s.name]) root[s.name] = [];
              }
         });
+        
+        // Ensure public exists if not returned by schemas API (unlikely but safe)
+        if (!root['public']) root['public'] = [];
 
         funcs.forEach((f: any) => {
             if (root[f.schema]) {
@@ -108,8 +106,9 @@ const LogicEditor = () => {
         });
 
         const treeData: TreeItem[] = Object.keys(root).sort().map(k => ({
-            name: k,
+            name: k === 'public' ? 'Geral (Public)' : k, // User friendly name for public
             type: 'schema',
+            schema: k, // Real schema name
             children: root[k]
         }));
         setTree(treeData);
@@ -138,9 +137,9 @@ const LogicEditor = () => {
       setResult(null);
   };
 
-  const handleSchemaClick = (schemaName: string) => {
-      setExpanded({...expanded, [schemaName]: !expanded[schemaName]});
-      setActiveSchema(schemaName); 
+  const handleSchemaClick = (schemaKey: string) => {
+      setExpanded({...expanded, [schemaKey]: !expanded[schemaKey]});
+      setActiveSchema(schemaKey); // Use the real schema name
   };
 
   const extractFunctionName = (sql: string) => {
@@ -155,7 +154,7 @@ const LogicEditor = () => {
   };
 
   const executeSave = async (payload?: {name: string, schema: string, sql: string, overwrite?: boolean, version?: boolean}) => {
-      const contextSchema = payload?.schema || selectedItem?.schema || activeSchema; 
+      const contextSchema = payload?.schema || selectedItem?.schema || activeSchema || 'public'; 
       let sqlToRun = payload?.sql || code;
       
       if (payload?.version) {
@@ -247,7 +246,7 @@ const LogicEditor = () => {
       copyToClipboard(curl).then(() => showToast("cURL copiado com chaves API!")).catch(() => showToast("Erro ao copiar", 'error'));
   };
 
-  // ... Trigger handlers ... (No changes needed)
+  // ... Trigger handlers ...
   const handleCreateTrigger = async () => {
       if(!newTrigger.table || !newTrigger.function) return showToast("Selecione tabela e função.", 'error');
       const tableName = newTrigger.table;
@@ -261,7 +260,7 @@ const LogicEditor = () => {
   }
   const handleDeleteTrigger = async (t: any) => { if(!confirm("Excluir gatilho?")) return; try { await api.delete('/triggers', { schema: t.schema, table: t.table, name: t.trigger_name }); loadTriggersData(); showToast("Gatilho removido."); } catch(e:any) { showToast(e.message, 'error'); } }
 
-  // ... Folder/Item handlers ... (No changes needed)
+  // ... Folder/Item handlers ...
   const handleCreateFolder = async () => { try { await api.post('/schemas', { name: itemName }); closeModal(); loadTree(); showToast("Pasta criada"); } catch(e:any) { showToast(e.message, 'error'); } }
   const handleCreateItem = async () => { try { const schema = targetSchema; if (itemType === 'file') { await api.post('/files', { name: itemName, content: '', schema_name: schema, type: 'txt' }); } else { const template = `CREATE OR REPLACE FUNCTION ${itemName}() RETURNS TRIGGER AS $$ \nBEGIN \n  -- Logic here\n  RETURN NEW; \nEND; \n$$ LANGUAGE plpgsql;`; setCode(template); setActiveSchema(schema); setSelectedItem({ name: itemName, type: 'function', schema: schema }); } closeModal(); loadTree(); showToast("Item criado"); } catch(e:any) { showToast(e.message, 'error'); } }
   const handleDeleteFolder = async () => { if(!contextMenu) return; if(!confirm(`Excluir pasta "${contextMenu.folder}"?`)) return; try { await api.delete(`/schemas/${contextMenu.folder}`); loadTree(); showToast("Pasta excluída"); } catch(e:any) { showToast(e.message, 'error'); } }
@@ -282,14 +281,6 @@ const LogicEditor = () => {
 
   return (
     <div className="flex flex-col h-full gap-4 relative">
-        {/* TOAST NOTIFICATION */}
-        {toast && (
-            <div className={`fixed top-6 right-6 z-[100] px-6 py-3 rounded-lg shadow-2xl flex items-center gap-3 animate-bounce-in transition-all ${toast.type === 'success' ? 'bg-emerald-600 text-white' : 'bg-red-600 text-white'}`}>
-                {toast.type === 'success' ? <CheckCircle size={20} /> : <Zap size={20} />}
-                <span className="font-bold text-sm">{toast.msg}</span>
-            </div>
-        )}
-
         {/* TOP TABS */}
         <div className="flex gap-4 border-b border-slate-700 pb-2">
             <button onClick={() => setActiveTab('code')} className={`flex items-center gap-2 px-4 py-2 rounded font-bold text-sm ${activeTab === 'code' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-800'}`}><FileCode size={16} /> Code Editor</button>
@@ -299,7 +290,7 @@ const LogicEditor = () => {
         {/* --- CODE EDITOR VIEW --- */}
         {activeTab === 'code' && (
             <div className="flex flex-1 gap-4 overflow-hidden">
-                {/* Modals */}
+                {/* Modals - Same as before... */}
                 {modalType === 'createFolder' && (
                     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
                         <div className="bg-slate-800 p-6 rounded border border-slate-600 w-80">
@@ -363,19 +354,19 @@ const LogicEditor = () => {
                         </div>
                     </div>
                     <div className="flex-1 overflow-y-auto p-2">
-                        {filteredTree.map(schema => (
-                            <div key={schema.name} className="mb-1">
-                                <div className={`flex items-center justify-between text-slate-300 hover:bg-slate-700 px-2 py-1 rounded cursor-pointer group ${activeSchema === schema.name ? 'bg-slate-700/50' : ''}`} onClick={() => handleSchemaClick(schema.name)} onMouseEnter={() => setHoveredFolder(schema.name)} onMouseLeave={() => setHoveredFolder(null)} onContextMenu={(e) => onContextMenu(e, schema.name)}>
+                        {filteredTree.map(node => (
+                            <div key={node.schema} className="mb-1">
+                                <div className={`flex items-center justify-between text-slate-300 hover:bg-slate-700 px-2 py-1 rounded cursor-pointer group ${activeSchema === node.schema ? 'bg-slate-700/50' : ''}`} onClick={() => handleSchemaClick(node.schema || '')} onMouseEnter={() => setHoveredFolder(node.schema || '')} onMouseLeave={() => setHoveredFolder(null)} onContextMenu={(e) => onContextMenu(e, node.schema || '')}>
                                     <div className="flex items-center gap-1 overflow-hidden">
-                                        {expanded[schema.name] || searchTerm ? <ChevronDown size={14}/> : <ChevronRight size={14}/>}
+                                        {expanded[node.schema || ''] || searchTerm ? <ChevronDown size={14}/> : <ChevronRight size={14}/>}
                                         <Folder size={14} className="text-blue-400" />
-                                        <span className="text-sm font-bold capitalize truncate">{schema.name}</span>
+                                        <span className="text-sm font-bold capitalize truncate">{node.name}</span>
                                     </div>
-                                    <button onClick={(e) => { e.stopPropagation(); openCreateItemModal(schema.name); }} className={`p-0.5 rounded hover:bg-emerald-600 hover:text-white transition-opacity ${hoveredFolder === schema.name ? 'opacity-100' : 'opacity-0'}`} title="Add Item"><Plus size={14} /></button>
+                                    <button onClick={(e) => { e.stopPropagation(); openCreateItemModal(node.schema || ''); }} className={`p-0.5 rounded hover:bg-emerald-600 hover:text-white transition-opacity ${hoveredFolder === node.schema ? 'opacity-100' : 'opacity-0'}`} title="Add Item"><Plus size={14} /></button>
                                 </div>
-                                {(expanded[schema.name] || searchTerm) && (
+                                {(expanded[node.schema || ''] || searchTerm) && (
                                     <div className="ml-4 border-l border-slate-700 pl-2 mt-1 space-y-0.5">
-                                        {schema.children?.map((item, i) => (
+                                        {node.children?.map((item, i) => (
                                             <div key={i} className={`flex items-center gap-2 px-2 py-1 rounded cursor-pointer text-sm ${selectedItem === item ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-700/50'}`} onClick={() => handleSelect(item)}>
                                                 {item.type === 'function' ? <FileCode size={14} className="flex-shrink-0" /> : <FileText size={14} className="flex-shrink-0" />}
                                                 <span className="truncate">{item.name}</span>
@@ -393,7 +384,7 @@ const LogicEditor = () => {
                     <div className="flex-1 bg-slate-950 border border-slate-700 rounded overflow-hidden flex flex-col">
                         <div className="bg-slate-900 p-2 border-b border-slate-700 flex justify-between items-center">
                             <span className="text-xs text-slate-400 font-mono">
-                                {selectedItem ? `${selectedItem.schema}/${selectedItem.name}` : (activeSchema ? `Contexto: ${activeSchema}` : 'Selecione uma pasta')}
+                                {selectedItem ? `${selectedItem.schema}/${selectedItem.name}` : (activeSchema ? `Contexto: ${activeSchema}` : 'Selecione uma pasta (Schema)')}
                             </span>
                             <button onClick={checkAndRun} className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1 rounded text-xs font-bold">
                                 {selectedItem?.type === 'file' ? <Save size={12} /> : <Play size={12} />} 

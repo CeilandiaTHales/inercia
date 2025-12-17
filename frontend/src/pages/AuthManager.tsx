@@ -2,9 +2,11 @@ import React, { useEffect, useState } from 'react';
 import { api, copyToClipboard } from '../api';
 import { User, ShieldCheck, Plus, Trash2, Key, ToggleLeft, ToggleRight, Check, AlertTriangle, ChevronDown, ChevronRight, Copy } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
+import { useToast } from '../contexts/ToastContext';
 
 const AuthManager = () => {
   const { t } = useLanguage();
+  const { showToast } = useToast();
   const [activeTab, setActiveTab] = useState<'users' | 'policies' | 'providers'>('users');
   
   const [users, setUsers] = useState<any[]>([]);
@@ -41,7 +43,7 @@ const AuthManager = () => {
   };
 
   const createUser = async () => {
-      try { await api.post('/auth/register', newUser); setShowUserModal(false); refresh(); } catch(e:any){alert(e.message);}
+      try { await api.post('/auth/register', newUser); setShowUserModal(false); refresh(); showToast("Usuário criado!"); } catch(e:any){ showToast(e.message, 'error'); }
   };
 
   const createPolicy = async () => {
@@ -55,13 +57,15 @@ const AuthManager = () => {
           });
           setShowPolicyModal(false);
           refresh();
-      } catch(e:any){alert(e.message);}
+          showToast("Regra criada com sucesso!");
+      } catch(e:any){ showToast(e.message, 'error'); }
   };
 
   const deletePolicy = async (p:any) => {
       if(!confirm("Deletar regra?")) return;
       await api.delete('/policies', { name: p.policyname, table: p.tablename, schema: p.schemaname });
       refresh();
+      showToast("Regra removida.");
   };
 
   const saveGoogleConfig = async () => {
@@ -72,24 +76,30 @@ const AuthManager = () => {
               client_secret: googleConfig.client_secret,
               enabled: googleConfig.enabled
           });
-          alert("Config Salva!");
+          showToast("Configuração OAuth salva!");
           refresh();
-      } catch (e: any) { alert(e.message); }
+      } catch (e: any) { showToast(e.message, 'error'); }
   };
 
   const handleCopy = (text: string) => {
-      copyToClipboard(text).then(() => alert("Copiado!")).catch(e => alert("Erro ao copiar: " + e));
+      copyToClipboard(text).then(() => showToast("Copiado!")).catch(e => showToast("Erro ao copiar", 'error'));
   };
 
   const toggleTable = (tableName: string) => {
       setExpandedTables(prev => ({...prev, [tableName]: !prev[tableName]}));
   }
 
-  // Group policies by table
+  // Group policies by table safely
   const policiesByTable: Record<string, any[]> = {};
-  tables.forEach(t => {
-      policiesByTable[t.table_name] = policies.filter(p => p.tablename === t.table_name);
-  });
+  if (Array.isArray(tables)) {
+      tables.forEach(t => {
+          if (t && t.table_name) {
+              policiesByTable[t.table_name] = Array.isArray(policies) 
+                  ? policies.filter(p => p.tablename === t.table_name)
+                  : [];
+          }
+      });
+  }
 
   return (
     <div className="space-y-6 h-full flex flex-col">
@@ -139,9 +149,9 @@ const AuthManager = () => {
                     
                     <div className="grid gap-4">
                         {Object.keys(policiesByTable).sort().map(tableName => {
-                            const tablePolicies = policiesByTable[tableName];
+                            const tablePolicies = policiesByTable[tableName] || [];
                             const isOpen = expandedTables[tableName];
-                            const rlsEnabled = tablePolicies.length > 0; // Simplified assumption, ideally check pg_class.relrowsecurity
+                            const rlsEnabled = tablePolicies.length > 0;
 
                             return (
                                 <div key={tableName} className="bg-slate-800 border border-slate-700 rounded-lg overflow-hidden">
@@ -163,14 +173,14 @@ const AuthManager = () => {
                                     {isOpen && (
                                         <div className="p-4 bg-slate-900/50 border-t border-slate-700 space-y-2">
                                             {tablePolicies.length === 0 ? (
-                                                <p className="text-slate-500 text-sm italic">Nenhuma regra. O acesso é totalmente aberto (se RLS desativado) ou fechado (se ativado sem políticas).</p>
+                                                <p className="text-slate-500 text-sm italic">Nenhuma regra ativa.</p>
                                             ) : (
                                                 tablePolicies.map((p, i) => (
                                                     <div key={i} className="bg-slate-950 border border-slate-800 p-3 rounded flex justify-between items-center group">
                                                         <div>
                                                             <div className="text-emerald-400 font-bold text-sm mb-1">{p.policyname}</div>
                                                             <div className="text-xs text-slate-400">
-                                                                Permitir <span className="text-white font-bold">{p.cmd}</span> para <span className="text-blue-400 font-mono font-bold">{(p.roles || []).join(', ') || 'PUBLIC'}</span>
+                                                                Permitir <span className="text-white font-bold">{p.cmd}</span> para <span className="text-blue-400 font-mono font-bold">{Array.isArray(p.roles) ? p.roles.join(', ') : 'PUBLIC'}</span>
                                                             </div>
                                                             <div className="mt-1 font-mono text-[10px] text-slate-500">
                                                                 USING ({p.qual || 'true'}) {p.with_check ? `WITH CHECK (${p.with_check})` : ''}
@@ -216,7 +226,7 @@ const AuthManager = () => {
             )}
         </div>
 
-        {/* POLICY MODAL */}
+        {/* Modals remain mostly same but using toast... */}
         {showPolicyModal && (
             <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
                 <div className="bg-slate-900 border border-slate-700 rounded-lg p-6 max-w-lg w-full shadow-2xl">

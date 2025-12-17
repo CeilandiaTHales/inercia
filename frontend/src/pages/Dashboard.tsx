@@ -1,10 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { api, copyToClipboard } from '../api';
-import { Activity, Server, Database, Lock, Plug, X, Copy, Eye, EyeOff, Key, Database as DbIcon, Radio } from 'lucide-react';
+import { Activity, Server, Database, Lock, Plug, X, Copy, Eye, EyeOff, Key, Database as DbIcon, Radio, Globe } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
+import { useToast } from '../contexts/ToastContext';
 
 const Dashboard = () => {
   const { t } = useLanguage();
+  const { showToast } = useToast();
   const [stats, setStats] = useState<any>({});
   const [showConnect, setShowConnect] = useState(false);
   const [config, setConfig] = useState<any>({});
@@ -54,16 +56,19 @@ const Dashboard = () => {
 
   const handleCopy = (text: string) => {
       copyToClipboard(text).then(() => {
-          // Could add a small toast here, but for now specific components handle it or just no-op visual feedback
-      }).catch(e => alert("Erro ao copiar: " + e));
+          showToast("Copiado!");
+      }).catch(e => showToast("Erro ao copiar", 'error'));
   };
 
-  const SecretField = ({ label, value }: { label: string, value: string }) => (
+  const SecretField = ({ label, value, help }: { label: string, value: string, help?: string }) => (
       <div className="mb-4">
-          <label className="block text-xs font-bold text-slate-500 uppercase mb-1">{label}</label>
+          <div className="flex justify-between items-center mb-1">
+            <label className="block text-xs font-bold text-slate-500 uppercase">{label}</label>
+            {help && <span className="text-[10px] text-emerald-400 bg-emerald-900/30 px-1 rounded">{help}</span>}
+          </div>
           <div className="flex items-center bg-slate-950 border border-slate-800 rounded p-2">
               <code className="flex-1 font-mono text-sm text-slate-300 truncate mr-2">
-                  {showSecrets ? value : '•'.repeat(value.length > 20 ? 20 : value.length)}
+                  {showSecrets || !value.includes('***') && !value.startsWith('postgres://') ? value : '•'.repeat(20)}
               </code>
               <button onClick={() => handleCopy(value)} className="text-slate-500 hover:text-white"><Copy size={16}/></button>
           </div>
@@ -84,7 +89,7 @@ const Dashboard = () => {
               </div>
               
               <div className="flex border-b border-slate-800 bg-slate-900">
-                  <button onClick={() => setConnectTab('api')} className={`flex-1 py-3 text-sm font-bold flex items-center justify-center gap-2 border-b-2 transition-colors ${connectTab === 'api' ? 'border-emerald-500 text-white bg-slate-800' : 'border-transparent text-slate-500 hover:bg-slate-800 hover:text-slate-300'}`}><Key size={16}/> API Keys</button>
+                  <button onClick={() => setConnectTab('api')} className={`flex-1 py-3 text-sm font-bold flex items-center justify-center gap-2 border-b-2 transition-colors ${connectTab === 'api' ? 'border-emerald-500 text-white bg-slate-800' : 'border-transparent text-slate-500 hover:bg-slate-800 hover:text-slate-300'}`}><Globe size={16}/> HTTP API</button>
                   <button onClick={() => setConnectTab('postgres')} className={`flex-1 py-3 text-sm font-bold flex items-center justify-center gap-2 border-b-2 transition-colors ${connectTab === 'postgres' ? 'border-blue-500 text-white bg-slate-800' : 'border-transparent text-slate-500 hover:bg-slate-800 hover:text-slate-300'}`}><DbIcon size={16}/> Postgres</button>
                   <button onClick={() => setConnectTab('redis')} className={`flex-1 py-3 text-sm font-bold flex items-center justify-center gap-2 border-b-2 transition-colors ${connectTab === 'redis' ? 'border-red-500 text-white bg-slate-800' : 'border-transparent text-slate-500 hover:bg-slate-800 hover:text-slate-300'}`}><Server size={16}/> Redis</button>
               </div>
@@ -92,6 +97,7 @@ const Dashboard = () => {
               <div className="p-6 overflow-y-auto bg-slate-900">
                   {connectTab === 'api' && (
                       <div className="space-y-6">
+                          <SecretField label="Public API URL" value={dbInfo?.apiUrl || '...'} help="n8n / Supabase Node URL" />
                           <div>
                               <div className="flex items-center gap-2 mb-2">
                                   <span className="px-2 py-0.5 rounded bg-emerald-900 text-emerald-300 text-[10px] font-bold uppercase">Public</span>
@@ -138,6 +144,7 @@ const Dashboard = () => {
                   {connectTab === 'redis' && dbInfo && (
                        <div className="space-y-4">
                            <SecretField label="Redis Connection String" value={dbInfo.redis.url} />
+                           <SecretField label="Redis Password" value={dbInfo.redis.password || 'Sem Senha'} />
                            <div className="bg-slate-800 p-4 rounded text-xs text-slate-400">
                                O Redis é utilizado internamente para filas de tarefas (Workers) e Cache. Conecte-se para monitorar ou usar como cache rápido.
                            </div>

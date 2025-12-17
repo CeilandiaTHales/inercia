@@ -25,6 +25,7 @@ services:
     image: redis:7-alpine
     container_name: inercia_redis
     restart: always
+    command: redis-server --requirepass ${REDIS_PASSWORD}
     environment:
       TZ: ${GENERIC_TIMEZONE:-UTC}
     networks:
@@ -41,7 +42,8 @@ services:
     environment:
       PORT: 3000
       DATABASE_URL: postgres://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME}
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
       JWT_SECRET: ${JWT_SECRET}
       JWT_EXPIRY: ${JWT_EXPIRY}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
@@ -73,7 +75,7 @@ services:
     command: ["npm", "run", "worker"]
     environment:
       DATABASE_URL: postgres://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME}
-      REDIS_URL: redis://redis:6379
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       TZ: ${GENERIC_TIMEZONE:-UTC}
     depends_on:
       redis:
