@@ -6,30 +6,20 @@ services:
     container_name: inercia_db
     restart: always
     environment:
-      POSTGRES_USER: ${DB_USER}
-      POSTGRES_PASSWORD: ${DB_PASSWORD}
-      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-admin123}
+      POSTGRES_DB: ${DB_NAME:-inercia_base}
       TZ: ${GENERIC_TIMEZONE:-UTC}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./backend/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./backend/init_sql.txt:/docker-entrypoint-initdb.d/init.sql
     networks:
       - inercia_net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-inercia_base}"]
       interval: 5s
       timeout: 5s
       retries: 5
-
-  redis:
-    image: redis:7-alpine
-    container_name: inercia_redis
-    restart: always
-    command: redis-server --requirepass ${REDIS_PASSWORD}
-    environment:
-      TZ: ${GENERIC_TIMEZONE:-UTC}
-    networks:
-      - inercia_net
 
   api:
     build:
@@ -38,48 +28,16 @@ services:
     container_name: inercia_api
     restart: always
     ports:
-      - "${PORT}:3000"
+      - "${PORT:-3000}:3000"
     environment:
       PORT: 3000
-      DATABASE_URL: postgres://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME}
-      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
-      REDIS_PASSWORD: ${REDIS_PASSWORD}
-      JWT_SECRET: ${JWT_SECRET}
-      JWT_EXPIRY: ${JWT_EXPIRY}
-      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
-      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
-      CALLBACK_URL: ${CALLBACK_URL}
-      FRONTEND_URL: ${FRONTEND_URL}
-      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS}
-      SUPER_ADMIN_EMAIL: ${SUPER_ADMIN_EMAIL}
-      SUPER_ADMIN_PASSWORD: ${SUPER_ADMIN_PASSWORD}
-      POOLER_DEFAULT_POOL_SIZE: ${POOLER_DEFAULT_POOL_SIZE}
-      STUDIO_DEFAULT_ORGANIZATION: ${STUDIO_DEFAULT_ORGANIZATION}
-      STUDIO_DEFAULT_PROJECT: ${STUDIO_DEFAULT_PROJECT}
-      API_EXTERNAL_URL: ${API_EXTERNAL_URL}
+      INSTANCE_MODE: CONTROL_PLANE # Change to DATA_PLANE for individual client APIs
+      DATABASE_URL: postgres://${DB_USER:-postgres}:${DB_PASSWORD:-admin123}@postgres:5432/${DB_NAME:-inercia_base}
+      JWT_SECRET: ${JWT_SECRET:-secret123}
       TZ: ${GENERIC_TIMEZONE:-UTC}
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_started
-    networks:
-      - inercia_net
-
-  worker:
-    build:
-      context: .
-      dockerfile: infrastructure/Dockerfile.node
-    container_name: inercia_worker
-    restart: always
-    command: ["npm", "run", "worker"]
-    environment:
-      DATABASE_URL: postgres://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME}
-      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
-      TZ: ${GENERIC_TIMEZONE:-UTC}
-    depends_on:
-      redis:
-        condition: service_started
     networks:
       - inercia_net
 
@@ -92,8 +50,8 @@ services:
     ports:
       - "80:80"
     environment:
-      DOMAIN_NAME: ${DOMAIN_NAME}
-      API_DOMAIN_NAME: ${API_DOMAIN_NAME}
+      DOMAIN_NAME: ${DOMAIN_NAME:-localhost}
+      API_DOMAIN_NAME: ${API_DOMAIN_NAME:-api.localhost}
     depends_on:
       - api
     networks:

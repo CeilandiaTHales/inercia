@@ -16,40 +16,64 @@ export const getAuthHeaders = (): Record<string, string> => {
 
 const handleResponse = async (res: Response) => {
     if (res.ok) return res.json();
-    let errorMessage = res.statusText;
+    
+    let errorMessage = `Error ${res.status}: ${res.statusText}`;
     try {
         const json = await res.json();
         if (json.error) errorMessage = json.error;
-    } catch (e) {}
-
-    if (res.status === 401) {
-       localStorage.removeItem('inercia_token');
-       window.location.hash = '/login';
+        if (json.message) errorMessage = json.message;
+    } catch (e) {
+        // Fallback if response is not JSON
     }
+
+    if (res.status === 401 || res.status === 403) {
+       // Only clear session if explicitly unauthenticated
+       if (res.status === 401 && !window.location.hash.includes('/login')) {
+           localStorage.removeItem('inercia_token');
+           window.location.href = '/#/login';
+       }
+    }
+    
     throw new Error(errorMessage);
 };
 
+// Standard Fetch with Timeout
+const fetchWithTimeout = async (url: string, options: any, timeout = 15000) => {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeout);
+    try {
+        const response = await fetch(url, { ...options, signal: controller.signal });
+        clearTimeout(id);
+        return response;
+    } catch (e: any) {
+        clearTimeout(id);
+        if (e.name === 'AbortError') throw new Error('Request timeout - server is taking too long');
+        throw e;
+    }
+};
+
 export const copyToClipboard = async (text: string): Promise<void> => {
-    if (!navigator.clipboard) {
+    try {
+        await navigator.clipboard.writeText(text);
+    } catch (err) {
         const textArea = document.createElement("textarea");
         textArea.value = text;
-        textArea.style.position = "fixed";
-        textArea.style.left = "-9999px";
         document.body.appendChild(textArea);
-        textArea.focus(); textArea.select();
-        try { document.execCommand('copy'); } finally { document.body.removeChild(textArea); }
-        return;
+        textArea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textArea);
     }
-    return navigator.clipboard.writeText(text);
 };
 
 export const api = {
   get: async (endpoint: string) => {
-    const res = await fetch(`${API_URL}${endpoint.startsWith('/') ? endpoint : `/${endpoint}`}`, { headers: getAuthHeaders() });
+    const url = `${API_URL}${endpoint.startsWith('/') ? endpoint : `/${endpoint}`}`;
+    const res = await fetchWithTimeout(url, { headers: getAuthHeaders() });
     return handleResponse(res);
   },
   post: async (endpoint: string, body: any) => {
-    const res = await fetch(`${API_URL}${endpoint.startsWith('/') ? endpoint : `/${endpoint}`}`, {
+    const url = `${API_URL}${endpoint.startsWith('/') ? endpoint : `/${endpoint}`}`;
+    const res = await fetchWithTimeout(url, {
       method: 'POST',
       headers: getAuthHeaders(),
       body: JSON.stringify(body)
@@ -57,7 +81,8 @@ export const api = {
     return handleResponse(res);
   },
   put: async (endpoint: string, body: any) => {
-    const res = await fetch(`${API_URL}${endpoint.startsWith('/') ? endpoint : `/${endpoint}`}`, {
+    const url = `${API_URL}${endpoint.startsWith('/') ? endpoint : `/${endpoint}`}`;
+    const res = await fetchWithTimeout(url, {
       method: 'PUT',
       headers: getAuthHeaders(),
       body: JSON.stringify(body)
@@ -65,7 +90,8 @@ export const api = {
     return handleResponse(res);
   },
   delete: async (endpoint: string, body?: any) => {
-    const res = await fetch(`${API_URL}${endpoint.startsWith('/') ? endpoint : `/${endpoint}`}`, {
+    const url = `${API_URL}${endpoint.startsWith('/') ? endpoint : `/${endpoint}`}`;
+    const res = await fetchWithTimeout(url, {
       method: 'DELETE',
       headers: getAuthHeaders(),
       body: body ? JSON.stringify(body) : undefined

@@ -1,144 +1,129 @@
-import express from 'express';
+
+import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { getBasePool, getProjectPool } from './db';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import helmet from 'helmet';
-import fs from 'fs';
-import path from 'path';
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-// SYSTEM_MODE can be 'CONTROL_PLANE' or 'DATA_PLANE'
 const MODE = process.env.INSTANCE_MODE || 'CONTROL_PLANE'; 
 
 app.set('trust proxy', true);
 
-// --- HELPER: NGINX CONFIG GENERATOR ---
-const generateNginxConfig = (project: any) => {
-    return `
-# Inércia Project: ${project.name} (${project.slug})
-server {
-    listen 80;
-    server_name ${project.api_url.replace(/^https?:\/\//, '')};
-
-    location / {
-        proxy_pass http://localhost:${project.internal_port || 3001};
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        
-        # Security: Injection of Project Context
-        proxy_set_header x-inercia-project-id "${project.id}";
-    }
-}
-    `.trim();
-};
-
-// --- SYSTEM INITIALIZATION (CONTROL PLANE ONLY) ---
+// --- SYSTEM INITIALIZATION ---
 const setupSystem = async () => {
     if (MODE !== 'CONTROL_PLANE') return;
     const pool = getBasePool();
     try {
+        console.log(`[Inércia] Starting in ${MODE} mode...`);
         await pool.query(`CREATE SCHEMA IF NOT EXISTS inercia_sys`);
         await pool.query(`CREATE SCHEMA IF NOT EXISTS auth`);
-        
-        await pool.query(`
-            CREATE TABLE IF NOT EXISTS inercia_sys.projects (
-                id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-                name VARCHAR(255) NOT NULL,
-                slug VARCHAR(100) UNIQUE NOT NULL,
-                db_url TEXT NOT NULL,
-                api_url TEXT UNIQUE,
-                internal_port INTEGER,
-                cors_origins TEXT[] DEFAULT '{}',
-                jwt_secret TEXT DEFAULT gen_random_uuid()::text,
-                status VARCHAR(20) DEFAULT 'active',
-                created_at TIMESTAMP DEFAULT NOW()
-            )
-        `);
-    } catch (e) { console.error("System init error", e); }
+        // Tables are created via init_sql.txt in Docker
+    } catch (e) { 
+        console.error("System init error - verify your DATABASE_URL", e); 
+    }
 };
 
 setupSystem();
 
-// --- MIDDLEWARE: CONTEXT RESOLUTION ---
-// Fixed: Refactored getContext to a non-async function that returns void.
-// This satisfies the Express RequestHandler type and avoids overload resolution issues in TypeScript.
-const getContext = (req: any, res: any, next: any) => {
+// --- CONTEXT MIDDLEWARE ---
+// Fix: Use 'any' for 'res' to bypass environments where Express 'Response' type conflicts with global or core Node types
+const getContext = (req: any, res: any, next: NextFunction) => {
     (async () => {
-        if (MODE === 'DATA_PLANE') {
-            // In DATA_PLANE mode, the DB and Secret are fixed from ENV
-            // This instance only serves ONE project.
-            req.projectPool = await getProjectPool('ENV'); 
-            req.jwtSecret = process.env.JWT_SECRET;
-            return next();
+        try {
+            if (MODE === 'DATA_PLANE') {
+                req.projectPool = await getProjectPool('ENV'); 
+                req.jwtSecret = process.env.JWT_SECRET;
+                return next();
+            }
+            
+            // In Studio (Control Plane), use header to switch context
+            const projectId = req.headers['x-project-id'];
+            if (projectId) {
+                req.projectPool = await getProjectPool(projectId as string);
+                req.projectId = projectId;
+                const pRes = await getBasePool().query('SELECT jwt_secret FROM inercia_sys.projects WHERE id = $1', [projectId]);
+                req.jwtSecret = pRes.rows[0]?.jwt_secret;
+            }
+            next();
+        } catch (err) {
+            next(err);
         }
-        
-        // In CONTROL_PLANE mode (The Studio), we manage multiple projects
-        const projectId = req.headers['x-project-id'];
-        if (projectId) {
-            req.projectPool = await getProjectPool(projectId);
-            req.projectId = projectId;
-            // Fetch project-specific JWT secret for auth management
-            const pRes = await getBasePool().query('SELECT jwt_secret FROM inercia_sys.projects WHERE id = $1', [projectId]);
-            req.jwtSecret = pRes.rows[0]?.jwt_secret;
-        }
-        next();
-    })().catch(next);
+    })();
 };
 
-app.use(helmet());
-app.use(express.json({ limit: '50mb' }));
-app.use(getContext);
+// Fix: Cast helmet and express.json to 'any' to resolve "No overload matches this call" errors
+app.use(helmet() as any);
+app.use(express.json({ limit: '50mb' }) as any);
+app.use(getContext as any);
 
-// Dynamic CORS based on project settings
-app.use((req: any, res, next) => {
-    const origin = req.headers.origin;
-    // Implementation of dynamic CORS check goes here
-    cors({ origin: true, credentials: true })(req, res, next);
+// Dynamic CORS
+// Fix: Use 'any' for req/res to ensure compatibility with standard middleware signatures
+app.use((req: any, res: any, next: NextFunction) => {
+    cors({ 
+        origin: true, // In production, replace with whitelist from DB/ENV
+        credentials: true 
+    })(req, res, next);
 });
 
-// --- ROUTES ---
+// --- AUTH MIDDLEWARE ---
+// Fix: Use 'any' for 'res' as Express methods like 'status' and 'json' may be incorrectly reported as missing on the type definition
+const authenticate = (req: any, res: any, next: NextFunction) => {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) return res.status(401).json({ error: "No token provided" });
 
-// 1. CONTROL PLANE ROUTES (Studio Management)
+    const token = authHeader.split(' ')[1];
+    jwt.verify(token, (req.jwtSecret || process.env.JWT_SECRET) as string, (err: any, decoded: any) => {
+        if (err) return res.status(403).json({ error: "Invalid or expired token" });
+        req.user = decoded;
+        next();
+    });
+};
+
+// --- ROUTES: CONTROL PLANE (Studio Only) ---
 if (MODE === 'CONTROL_PLANE') {
-    app.get('/api/projects', async (req, res) => {
+    app.get('/api/projects', authenticate, async (req: any, res: any) => {
         const r = await getBasePool().query('SELECT * FROM inercia_sys.projects ORDER BY created_at DESC');
         res.json(r.rows);
     });
 
-    app.get('/api/projects/:id/nginx', async (req, res) => {
-        const r = await getBasePool().query('SELECT * FROM inercia_sys.projects WHERE id = $1', [req.params.id]);
-        if (r.rows.length === 0) return res.status(404).json({ error: "Project not found" });
-        res.json({ config: generateNginxConfig(r.rows[0]) });
-    });
-
-    app.post('/api/auth/login', async (req, res) => {
+    app.post('/api/auth/login', async (req: any, res: any) => {
         const { email, password } = req.body;
         const result = await getBasePool().query(`SELECT * FROM auth.users WHERE email = $1`, [email]);
-        if (result.rows.length === 0) return res.status(401).json({ error: "Admin User not found" });
-        const user = result.rows[0];
-        const valid = await bcrypt.compare(password, user.encrypted_password);
+        if (result.rows.length === 0) return res.status(401).json({ error: "User not found" });
+        
+        const valid = await bcrypt.compare(password, result.rows[0].encrypted_password);
         if (!valid) return res.status(401).json({ error: "Invalid password" });
-        const token = jwt.sign({ id: user.id, role: 'admin' }, process.env.JWT_SECRET as string, { expiresIn: '24h' });
-        res.json({ token, user: { id: user.id, email: user.email, role: 'admin' } });
+        
+        const token = jwt.sign({ id: result.rows[0].id, role: 'admin' }, process.env.JWT_SECRET as string, { expiresIn: '24h' });
+        res.json({ token, user: { email } });
     });
 }
 
-// 2. DATA PLANE / SCOPED ROUTES (The actual BaaS functionality)
-app.get('/api/rest/v1/:table', async (req: any, res) => {
-    if (!req.projectPool) return res.status(400).json({ error: "Project context not identified" });
+// --- ROUTES: DATA PLANE (BaaS API) ---
+// Fix: Explicitly use 'any' for response to fix errors where 'status' or 'json' properties are not detected by the compiler
+app.get('/api/rest/v1/:table', authenticate, async (req: any, res: any) => {
+    if (!req.projectPool) return res.status(400).json({ error: "Project context missing" });
     try {
-        const result = await req.projectPool.query(`SELECT * FROM "public"."${req.params.table}"`);
+        const result = await req.projectPool.query(`SELECT * FROM "public"."${req.params.table}" LIMIT 1000`);
         res.json(result.rows);
-    } catch (e: any) { res.status(400).json({ error: e.message }); }
+    } catch (e: any) { 
+        res.status(400).json({ error: e.message }); 
+    }
 });
 
-// ... other routes (SQL, RPC) use req.projectPool
+// Global Error Handler
+// Fix: Use 'any' for 'res' to avoid "Property 'status' does not exist" errors in error handling middleware
+app.use((err: any, req: Request, res: any, next: NextFunction) => {
+    console.error(err);
+    res.status(500).json({ error: "Internal Server Error", message: err.message });
+});
 
-app.listen(PORT, () => { console.log(`Inércia ${MODE} running on port ${PORT}`); });
+app.listen(PORT, () => {
+    console.log(`🚀 Inércia ${MODE} is active on port ${PORT}`);
+});
