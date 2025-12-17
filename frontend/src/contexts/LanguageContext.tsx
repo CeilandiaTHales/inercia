@@ -1,3 +1,4 @@
+
 import React, { createContext, useContext, useState, ReactNode } from 'react';
 import { translations } from '../translations';
 
@@ -11,7 +12,8 @@ interface LanguageContextType {
 
 const LanguageContext = createContext<LanguageContextType | undefined>(undefined);
 
-export const LanguageProvider = ({ children }: { children: ReactNode }) => {
+// Fix: Change children to optional to resolve JSX children mapping issue in some TypeScript environments
+export const LanguageProvider = ({ children }: { children?: ReactNode }) => {
   // Default to Portuguese
   const [language, setLanguage] = useState<Language>('pt');
 

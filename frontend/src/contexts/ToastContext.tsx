@@ -1,3 +1,4 @@
+
 import React, { createContext, useContext, useState, ReactNode } from 'react';
 import { CheckCircle, Zap, XCircle, Info } from 'lucide-react';
 
@@ -15,7 +16,8 @@ interface ToastContextType {
 
 const ToastContext = createContext<ToastContextType | undefined>(undefined);
 
-export const ToastProvider = ({ children }: { children: ReactNode }) => {
+// Fix: Change children to optional to resolve JSX children mapping issue in some TypeScript environments
+export const ToastProvider = ({ children }: { children?: ReactNode }) => {
   const [toasts, setToasts] = useState<ToastData[]>([]);
 
   const showToast = (msg: string, type: ToastType = 'success') => {
