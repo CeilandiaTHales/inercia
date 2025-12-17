@@ -24,7 +24,9 @@
     "passport-google-oauth20": "^2.0.0",
     "passport": "^0.7.0",
     "helmet": "^8.1.0",
-    "bullmq": "^5.66.0"
+    "bullmq": "^5.66.0",
+    "path": "^0.12.7",
+    "fs": "^0.0.1-security"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",

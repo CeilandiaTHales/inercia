@@ -2,51 +2,41 @@
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
--- Create Auth Schema
+-- Create Auth Schema (System Admins)
 CREATE SCHEMA IF NOT EXISTS auth;
 
--- Create Users Table
+-- Create System Meta Schema
+CREATE SCHEMA IF NOT EXISTS inercia_sys;
+
+-- System Projects Registry
+CREATE TABLE IF NOT EXISTS inercia_sys.projects (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name VARCHAR(255) NOT NULL,
+    slug VARCHAR(100) UNIQUE NOT NULL,
+    db_url TEXT NOT NULL,
+    api_url TEXT UNIQUE,
+    internal_port INTEGER,
+    cors_origins TEXT[] DEFAULT '{}',
+    jwt_secret TEXT DEFAULT gen_random_uuid()::text,
+    status VARCHAR(20) DEFAULT 'active',
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Admin Users (Studio access only)
 CREATE TABLE IF NOT EXISTS auth.users (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     email VARCHAR(255) UNIQUE NOT NULL,
     encrypted_password TEXT,
-    provider VARCHAR(50) DEFAULT 'email',
-    role VARCHAR(50) DEFAULT 'user',
+    role VARCHAR(50) DEFAULT 'admin',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- Insert Default Admin (Password: admin123)
-INSERT INTO auth.users (email, encrypted_password, role, provider)
-VALUES (
-    'admin@inercia.io',
-    crypt('admin123', gen_salt('bf')),
-    'admin',
-    'email'
-) ON CONFLICT (email) DO NOTHING;
+-- Seed Default Project
+INSERT INTO inercia_sys.projects (name, slug, db_url, api_url, internal_port)
+VALUES ('Inércia Default', 'default', 'postgres://postgres:change_this_password_for_production_please@postgres:5432/inercia_base', 'http://localhost:3000', 3000)
+ON CONFLICT (slug) DO NOTHING;
 
--- Create Public Dummy Data
-CREATE TABLE IF NOT EXISTS public.products (
-    id SERIAL PRIMARY KEY,
-    name VARCHAR(100) NOT NULL,
-    price DECIMAL(10, 2) NOT NULL,
-    stock INT DEFAULT 0,
-    created_at TIMESTAMP DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS public.orders (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID REFERENCES auth.users(id),
-    total DECIMAL(10, 2) NOT NULL,
-    status VARCHAR(20) DEFAULT 'pending',
-    created_at TIMESTAMP DEFAULT NOW()
-);
-
--- Insert dummy products
-INSERT INTO public.products (name, price, stock) VALUES
-('Quantum Processor', 999.99, 50),
-('Neural Interface', 4500.00, 10),
-('Holographic Display', 299.50, 100);
-
--- Insert dummy order for admin
-INSERT INTO public.orders (user_id, total, status) 
-SELECT id, 1499.99, 'completed' FROM auth.users WHERE email = 'admin@inercia.io';
+-- Seed Initial Admin (admin@inercia.io / admin123)
+INSERT INTO auth.users (email, encrypted_password, role)
+VALUES ('admin@inercia.io', crypt('admin123', gen_salt('bf')), 'admin')
+ON CONFLICT (email) DO NOTHING;
