@@ -64,8 +64,6 @@ app.use(cors({
 app.use(express.json({ limit: '50mb' }) as any);
 app.use(passport.initialize());
 
-// ... (Auth Logic Remains the same, keeping it concise for xml limit, assuming standard auth blocks from previous context) ...
-// Re-inserting standard auth helpers and strategies for completeness of the file rewrite
 interface User { id: string; email: string; role: string; }
 const getExpiry = () => {
     const envVal = process.env.JWT_EXPIRY;
@@ -272,14 +270,11 @@ app.post('/api/import/csv', authenticateJWT, requireAdmin, async (req, res) => {
         await client.query('BEGIN');
         
         if (createTable) {
-            // Infer types from first non-empty value of each column
             const headers = Object.keys(rows[0]);
             let columnsSql = [];
-            
             for (const header of headers) {
-                let detectedType = 'TEXT'; // Default
+                let detectedType = 'TEXT'; 
                 const value = rows.find((r: any) => r[header] !== null && r[header] !== '')?.[header];
-                
                 if (value !== undefined) {
                     if (!isNaN(Number(value))) detectedType = value.includes('.') ? 'NUMERIC' : 'INTEGER';
                     else if (['true', 'false'].includes(String(value).toLowerCase())) detectedType = 'BOOLEAN';
@@ -287,8 +282,6 @@ app.post('/api/import/csv', authenticateJWT, requireAdmin, async (req, res) => {
                 }
                 columnsSql.push(`"${header}" ${detectedType}`);
             }
-            
-            // Add ID and Created_at by default
             const createSql = `
                 CREATE TABLE IF NOT EXISTS "${schemaName}"."${table}" (
                     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -299,7 +292,6 @@ app.post('/api/import/csv', authenticateJWT, requireAdmin, async (req, res) => {
             await client.query(createSql);
         }
 
-        // Insert Data
         let inserted = 0;
         for (const row of rows) {
              const cols = Object.keys(row).map(c => `"${c}"`).join(', ');
@@ -332,6 +324,22 @@ app.post('/api/schemas', authenticateJWT, requireAdmin, async (req, res) => {
         await pool.query(`CREATE SCHEMA IF NOT EXISTS "${req.body.name}"`);
         res.json({ success: true });
     } catch(e: any) { res.status(500).json({ error: e.message }); }
+});
+
+app.put('/api/schemas/:name', authenticateJWT, requireAdmin, async (req, res) => {
+    const { name } = req.params;
+    const { newName } = req.body;
+    try {
+        await pool.query(`ALTER SCHEMA "${name}" RENAME TO "${newName}"`);
+        res.json({ success: true });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/schemas/:name', authenticateJWT, requireAdmin, async (req, res) => {
+    try {
+        await pool.query(`DROP SCHEMA "${req.params.name}" CASCADE`);
+        res.json({ success: true });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
 // SYSTEM FILES (TXT, SCRIPTS)
@@ -426,16 +434,33 @@ app.get('/api/policies', authenticateJWT, async (req, res) => {
     res.json(r.rows);
 });
 
+// FIXED RLS POLICY CREATION LOGIC
 app.post('/api/policies', authenticateJWT, requireAdmin, async (req, res) => {
     const { table, role, command, expression, schema } = req.body;
     try {
         const policyName = `policy_${table}_${command}_${Date.now()}`;
-        const query = `
+        
+        let sql = `
             ALTER TABLE "${schema}"."${table}" ENABLE ROW LEVEL SECURITY;
             CREATE POLICY "${policyName}" ON "${schema}"."${table}"
-            FOR ${command} TO ${role} USING (${expression}) WITH CHECK (${expression});
+            FOR ${command} TO ${role}
         `;
-        await pool.query(query);
+
+        // Postgres logic: 
+        // SELECT/DELETE uses 'USING'
+        // INSERT uses 'WITH CHECK'
+        // UPDATE can use both (USING for visibility, WITH CHECK for new row validity)
+        
+        if (command === 'INSERT') {
+             sql += ` WITH CHECK (${expression});`;
+        } else if (command === 'SELECT' || command === 'DELETE') {
+             sql += ` USING (${expression});`;
+        } else {
+             // ALL or UPDATE
+             sql += ` USING (${expression}) WITH CHECK (${expression});`;
+        }
+
+        await pool.query(sql);
         res.json({ success: true });
     } catch(e: any) { res.status(500).json({ error: e.message }); }
 });

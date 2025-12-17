@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { api } from '../api';
-import { Folder, FileCode, Play, Save, Plus, ChevronRight, ChevronDown, FolderPlus, FilePlus, FileText } from 'lucide-react';
+import { Folder, FileCode, Play, Plus, ChevronRight, ChevronDown, FolderPlus, FilePlus, FileText, Trash2, Edit2, MoreVertical } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
 
 interface TreeItem {
@@ -22,12 +22,24 @@ const LogicEditor = () => {
   const [result, setResult] = useState<any>(null);
   const [config, setConfig] = useState<any>({});
   
-  // New Item
-  const [showNewModal, setShowNewModal] = useState(false);
-  const [newItemType, setNewItemType] = useState<'folder' | 'function' | 'file'>('folder');
-  const [newItemName, setNewItemName] = useState('');
+  // Modals
+  const [modalType, setModalType] = useState<'createFolder' | 'createItem' | 'rename' | null>(null);
+  const [targetSchema, setTargetSchema] = useState('');
+  const [itemName, setItemName] = useState('');
+  const [itemType, setItemType] = useState<'function' | 'file'>('function');
+
+  // UI interaction states
+  const [hoveredFolder, setHoveredFolder] = useState<string | null>(null);
+  const [contextMenu, setContextMenu] = useState<{x:number, y:number, folder: string} | null>(null);
 
   useEffect(() => { loadTree(); api.get('/config').then(setConfig); }, []);
+
+  // Close context menu on click elsewhere
+  useEffect(() => {
+    const close = () => setContextMenu(null);
+    window.addEventListener('click', close);
+    return () => window.removeEventListener('click', close);
+  }, []);
 
   const loadTree = async () => {
     try {
@@ -38,45 +50,31 @@ const LogicEditor = () => {
         ]);
 
         const root: Record<string, TreeItem[]> = {};
-
-        // 1. Schemas as Folders
+        
+        // 1. Schemas (Folders)
         schemas.forEach((s: any) => {
-             // Exclude defaults if backend didn't already
-             if (!['public', 'inercia_sys'].includes(s.name)) {
-                 root[s.name] = [];
+             if (!['inercia_sys'].includes(s.name)) {
+                 // Map 'public' to 'Principal' conceptually in UI, or keep as public.
+                 // User asked for "Principal". Let's treat "public" and "principal" as the main bucket.
+                 const key = s.name === 'public' ? 'principal' : s.name;
+                 if(!root[key]) root[key] = [];
              }
         });
-        
-        // Ensure "principal" exists
         if (!root['principal']) root['principal'] = [];
 
         // 2. Functions
         funcs.forEach((f: any) => {
-            let targetFolder = f.schema;
-            if (f.schema === 'public') targetFolder = 'principal'; // "Public" functions go to Principal
-            
-            // Only add if target folder exists (we ignored system schemas)
-            if (root[targetFolder]) {
-                root[targetFolder].push({
-                    name: f.name,
-                    type: 'function',
-                    schema: f.schema,
-                    def: f.def,
-                    args: f.args
-                });
+            let key = f.schema === 'public' ? 'principal' : f.schema;
+            if (root[key]) {
+                root[key].push({ name: f.name, type: 'function', schema: f.schema, def: f.def, args: f.args });
             }
         });
 
-        // 3. Files (Text/Scripts)
+        // 3. Files
         files.forEach((f: any) => {
-            const target = f.schema_name || 'principal';
-            if (root[target]) {
-                root[target].push({
-                    name: f.name,
-                    type: 'file',
-                    schema: target,
-                    content: f.content
-                });
+            const key = (!f.schema_name || f.schema_name === 'public') ? 'principal' : f.schema_name;
+            if (root[key]) {
+                root[key].push({ name: f.name, type: 'file', schema: key, content: f.content });
             }
         });
 
@@ -85,7 +83,6 @@ const LogicEditor = () => {
             type: 'schema',
             children: root[k]
         }));
-
         setTree(treeData);
     } catch(e) { console.error(e); }
   };
@@ -100,16 +97,11 @@ const LogicEditor = () => {
   const runCode = async () => {
       setResult(null);
       if (selectedItem?.type === 'file') {
-          // Update file content
-          try {
-             // Basic implementation: delete old and insert new (versioning would be better but keeping it simple)
-             // Real impl would need ID. Using name+schema as key for now in this simple version
-             alert("File saved (Simulation). To implement real save, use ID.");
-          } catch(e) {}
+          // Simulation for text file save
+          alert("Arquivo salvo (Simulado). Para persistência real, implemente UPDATE no backend usando ID.");
           return;
       }
       try {
-          // If "SELECT", execute it. If "CREATE", execute it.
           const res = await api.post('/sql', { query: code });
           setResult({ status: 'success', data: res });
           if (res.createdFunction) loadTree();
@@ -118,68 +110,156 @@ const LogicEditor = () => {
       }
   };
 
-  const createItem = async () => {
+  const handleCreateFolder = async () => {
       try {
-          if (newItemType === 'folder') {
-              await api.post('/schemas', { name: newItemName });
-          } else if (newItemType === 'file') {
-              await api.post('/files', { name: newItemName, content: '', schema_name: 'principal' }); // Default to principal for simplicity in UI
-          } else {
-              // Function Template
-              const template = `CREATE OR REPLACE FUNCTION public.${newItemName}() RETURNS void AS $$ BEGIN END; $$ LANGUAGE plpgsql;`;
-              setCode(template);
-          }
-          setShowNewModal(false);
-          setNewItemName('');
+          await api.post('/schemas', { name: itemName });
+          closeModal();
           loadTree();
-      } catch(e: any) { alert(e.message); }
-  };
+      } catch(e:any) { alert(e.message); }
+  }
+
+  const handleCreateItem = async () => {
+      try {
+          const schema = targetSchema === 'principal' ? 'public' : targetSchema;
+          if (itemType === 'file') {
+               await api.post('/files', { name: itemName, content: '', schema_name: targetSchema, type: 'txt' });
+          } else {
+               const template = `CREATE OR REPLACE FUNCTION "${schema}"."${itemName}"() RETURNS void AS $$ BEGIN END; $$ LANGUAGE plpgsql;`;
+               setCode(template);
+          }
+          closeModal();
+          loadTree();
+      } catch(e:any) { alert(e.message); }
+  }
+
+  const handleDeleteFolder = async () => {
+      if(!contextMenu) return;
+      if(!confirm(`Excluir pasta "${contextMenu.folder}" e todo seu conteúdo?`)) return;
+      try {
+          await api.delete(`/schemas/${contextMenu.folder}`);
+          loadTree();
+      } catch(e:any) { alert(e.message); }
+  }
+
+  const handleRenameFolder = async () => {
+      // Basic implementation requires new modal or prompt. Using prompt for simplicity to fix logic first.
+      if(!contextMenu) return;
+      const newName = prompt("Novo nome:", contextMenu.folder);
+      if(newName && newName !== contextMenu.folder) {
+          try {
+              await api.put(`/schemas/${contextMenu.folder}`, { newName });
+              loadTree();
+          } catch(e:any) { alert(e.message); }
+      }
+  }
+
+  const openCreateItemModal = (schema: string) => {
+      setTargetSchema(schema);
+      setModalType('createItem');
+      setItemName('');
+  }
+
+  const onContextMenu = (e: React.MouseEvent, folder: string) => {
+      e.preventDefault();
+      setContextMenu({ x: e.clientX, y: e.clientY, folder });
+  }
+
+  const closeModal = () => {
+      setModalType(null);
+      setItemName('');
+  }
 
   return (
     <div className="flex h-full gap-4">
-        {showNewModal && (
+        {/* Modals */}
+        {modalType === 'createFolder' && (
             <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
-                <div className="bg-slate-800 p-6 rounded border border-slate-600">
-                    <h3 className="text-white font-bold mb-4">Criar Novo Item</h3>
-                    <div className="flex gap-2 mb-4">
-                        <button onClick={() => setNewItemType('folder')} className={`px-3 py-1 rounded text-sm ${newItemType === 'folder' ? 'bg-emerald-600' : 'bg-slate-700'}`}>Pasta</button>
-                        <button onClick={() => setNewItemType('function')} className={`px-3 py-1 rounded text-sm ${newItemType === 'function' ? 'bg-emerald-600' : 'bg-slate-700'}`}>Função SQL</button>
-                        <button onClick={() => setNewItemType('file')} className={`px-3 py-1 rounded text-sm ${newItemType === 'file' ? 'bg-emerald-600' : 'bg-slate-700'}`}>Arquivo Txt</button>
-                    </div>
-                    <input className="bg-slate-900 border border-slate-700 text-white p-2 rounded w-64 mb-4" placeholder="Nome..." value={newItemName} onChange={e => setNewItemName(e.target.value)} />
+                <div className="bg-slate-800 p-6 rounded border border-slate-600 w-80">
+                    <h3 className="text-white font-bold mb-4">Nova Pasta</h3>
+                    <input className="w-full bg-slate-900 border border-slate-700 text-white p-2 rounded mb-4" placeholder="Nome da pasta..." value={itemName} onChange={e => setItemName(e.target.value)} />
                     <div className="flex justify-end gap-2">
-                        <button onClick={() => setShowNewModal(false)} className="text-slate-400">Cancelar</button>
-                        <button onClick={createItem} className="bg-emerald-600 text-white px-4 py-2 rounded">Criar</button>
+                        <button onClick={closeModal} className="text-slate-400">Cancelar</button>
+                        <button onClick={handleCreateFolder} className="bg-emerald-600 text-white px-4 py-2 rounded">Criar</button>
                     </div>
                 </div>
+            </div>
+        )}
+
+        {modalType === 'createItem' && (
+            <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+                <div className="bg-slate-800 p-6 rounded border border-slate-600 w-96">
+                    <h3 className="text-white font-bold mb-4">Novo Item em "{targetSchema}"</h3>
+                    <div className="flex gap-2 mb-4">
+                        <button onClick={() => setItemType('function')} className={`flex-1 py-2 rounded text-sm ${itemType === 'function' ? 'bg-emerald-600 text-white' : 'bg-slate-700 text-slate-300'}`}>Função SQL</button>
+                        <button onClick={() => setItemType('file')} className={`flex-1 py-2 rounded text-sm ${itemType === 'file' ? 'bg-emerald-600 text-white' : 'bg-slate-700 text-slate-300'}`}>Arquivo TXT</button>
+                    </div>
+                    <input className="w-full bg-slate-900 border border-slate-700 text-white p-2 rounded mb-4" placeholder="Nome..." value={itemName} onChange={e => setItemName(e.target.value)} />
+                    <div className="flex justify-end gap-2">
+                        <button onClick={closeModal} className="text-slate-400">Cancelar</button>
+                        <button onClick={handleCreateItem} className="bg-emerald-600 text-white px-4 py-2 rounded">Criar</button>
+                    </div>
+                </div>
+            </div>
+        )}
+
+        {/* Context Menu */}
+        {contextMenu && (
+            <div 
+                className="fixed bg-slate-800 border border-slate-600 rounded shadow-xl py-1 z-[60] w-40"
+                style={{ top: contextMenu.y, left: contextMenu.x }}
+                onClick={(e) => e.stopPropagation()}
+            >
+                <button onClick={handleRenameFolder} className="w-full text-left px-4 py-2 text-sm text-slate-300 hover:bg-slate-700 flex items-center gap-2"><Edit2 size={14}/> Renomear</button>
+                <button onClick={handleDeleteFolder} className="w-full text-left px-4 py-2 text-sm text-red-400 hover:bg-slate-700 flex items-center gap-2"><Trash2 size={14}/> Excluir</button>
             </div>
         )}
 
         <div className="w-64 bg-slate-800 rounded border border-slate-700 flex flex-col">
             <div className="p-3 bg-slate-900 border-b border-slate-700 flex justify-between items-center">
                 <span className="text-xs font-bold text-slate-400 uppercase">{t.logic.explorer}</span>
-                <button onClick={() => setShowNewModal(true)} className="text-emerald-400 hover:text-white"><Plus size={16}/></button>
+                <button 
+                    onClick={() => { setModalType('createFolder'); setItemName(''); }} 
+                    className="text-emerald-400 hover:text-white bg-slate-800 p-1 rounded border border-slate-700 hover:bg-slate-700" 
+                    title="Nova Pasta"
+                >
+                    <FolderPlus size={16}/>
+                </button>
             </div>
             <div className="flex-1 overflow-y-auto p-2">
                 {tree.map(schema => (
-                    <div key={schema.name}>
+                    <div key={schema.name} className="mb-1">
                         <div 
-                            className="flex items-center gap-1 text-slate-300 hover:bg-slate-700 px-2 py-1 rounded cursor-pointer select-none"
+                            className="flex items-center justify-between text-slate-300 hover:bg-slate-700 px-2 py-1 rounded cursor-pointer group"
                             onClick={() => setExpanded({...expanded, [schema.name]: !expanded[schema.name]})}
+                            onMouseEnter={() => setHoveredFolder(schema.name)}
+                            onMouseLeave={() => setHoveredFolder(null)}
+                            onContextMenu={(e) => onContextMenu(e, schema.name)}
                         >
-                            {expanded[schema.name] ? <ChevronDown size={14}/> : <ChevronRight size={14}/>}
-                            <Folder size={14} className={schema.name === 'principal' ? "text-emerald-500" : "text-blue-400"} />
-                            <span className="text-sm font-bold capitalize">{schema.name}</span>
+                            <div className="flex items-center gap-1 overflow-hidden">
+                                {expanded[schema.name] ? <ChevronDown size={14}/> : <ChevronRight size={14}/>}
+                                <Folder size={14} className={schema.name === 'principal' ? "text-emerald-500" : "text-blue-400"} />
+                                <span className="text-sm font-bold capitalize truncate">{schema.name}</span>
+                            </div>
+                            
+                            {/* Hover Plus Button for Item Creation */}
+                            <button 
+                                onClick={(e) => { e.stopPropagation(); openCreateItemModal(schema.name); }}
+                                className={`p-0.5 rounded hover:bg-emerald-600 hover:text-white transition-opacity ${hoveredFolder === schema.name ? 'opacity-100' : 'opacity-0'}`}
+                                title="Add Item"
+                            >
+                                <Plus size={14} />
+                            </button>
                         </div>
+
                         {expanded[schema.name] && (
-                            <div className="ml-4 border-l border-slate-700 pl-2">
+                            <div className="ml-4 border-l border-slate-700 pl-2 mt-1 space-y-0.5">
                                 {schema.children?.map((item, i) => (
                                     <div 
                                         key={i}
-                                        className={`flex items-center gap-2 px-2 py-1 rounded cursor-pointer text-sm ${selectedItem === item ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                                        className={`flex items-center gap-2 px-2 py-1 rounded cursor-pointer text-sm ${selectedItem === item ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-700/50'}`}
                                         onClick={() => handleSelect(item)}
                                     >
-                                        {item.type === 'function' ? <FileCode size={14} /> : <FileText size={14} />}
+                                        {item.type === 'function' ? <FileCode size={14} className="flex-shrink-0" /> : <FileText size={14} className="flex-shrink-0" />}
                                         <span className="truncate">{item.name}</span>
                                     </div>
                                 ))}

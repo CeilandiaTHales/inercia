@@ -13,8 +13,9 @@ const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   return (
     <div className="flex h-screen bg-slate-950">
       <Sidebar />
-      <main className="flex-1 overflow-auto bg-slate-900 p-8">
-        <div className="max-w-7xl mx-auto h-full flex flex-col">
+      {/* Changed: Removed max-w-7xl and mx-auto. Added w-full to use full available space */}
+      <main className="flex-1 overflow-auto bg-slate-900 p-4 w-full">
+        <div className="h-full flex flex-col w-full">
           {children}
         </div>
       </main>
