@@ -3,28 +3,35 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-console.log(`Initializing DB connection pool...`);
-console.log(`Timezone: ${process.env.TZ || 'UTC'}`);
-
-const poolSize = parseInt(process.env.POOLER_DEFAULT_POOL_SIZE || '20', 10);
-
-const pool = new Pool({
+const basePool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  max: poolSize, // Optimized for server capacity
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 5000, // Increased for stability
+  max: 10,
 });
 
-pool.on('connect', (client) => {
-  // Ensure the connection uses the correct timezone
-  if (process.env.TZ) {
-      client.query(`SET timezone TO '${process.env.TZ}'`).catch(console.error);
-  }
-});
+// Cache for project specific pools
+const projectPools: Record<string, Pool> = {};
 
-pool.on('error', (err) => {
-  console.error('Unexpected error on idle client', err);
-  // Do not exit process immediately in production, try to recover or let container orchestrator restart
-});
+export const getBasePool = () => basePool;
 
-export default pool;
+export const getProjectPool = async (projectId: string): Promise<Pool> => {
+    // If it's the default "system" project or similar
+    if (projectId === 'system') return basePool;
+
+    if (projectPools[projectId]) return projectPools[projectId];
+
+    // Fetch project DB connection from base database
+    const res = await basePool.query('SELECT db_url FROM inercia_sys.projects WHERE id = $1', [projectId]);
+    if (res.rows.length === 0) throw new Error("Project not found");
+
+    const dbUrl = res.rows[0].db_url;
+    const pool = new Pool({
+        connectionString: dbUrl,
+        max: 20,
+        idleTimeoutMillis: 30000,
+    });
+
+    projectPools[projectId] = pool;
+    return pool;
+};
+
+export default basePool;
