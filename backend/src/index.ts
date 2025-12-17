@@ -15,10 +15,16 @@ const PORT = process.env.PORT || 3000;
 
 app.set('trust proxy', true);
 
-// --- INITIALIZATION & SYSTEM SETUP ---
+// --- AGGRESSIVE SYSTEM SETUP (RLS & AUTH INFRASTRUCTURE) ---
 const setupSystem = async () => {
     try {
+        console.log("Initializing Inércia System Infrastructure...");
+
+        // 1. Core Schemas
         await pool.query(`CREATE SCHEMA IF NOT EXISTS inercia_sys`);
+        await pool.query(`CREATE SCHEMA IF NOT EXISTS auth`);
+        
+        // 2. System Tables
         await pool.query(`
             CREATE TABLE IF NOT EXISTS inercia_sys.files (
                 id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -31,10 +37,10 @@ const setupSystem = async () => {
             )
         `);
         
-        // Auth Providers Table (Dynamic Auth)
+        // 3. Auth Providers
         await pool.query(`
             CREATE TABLE IF NOT EXISTS auth.providers (
-                id VARCHAR(50) PRIMARY KEY, -- 'google', 'github', 'apple'
+                id VARCHAR(50) PRIMARY KEY,
                 client_id TEXT,
                 client_secret TEXT,
                 enabled BOOLEAN DEFAULT false,
@@ -42,16 +48,60 @@ const setupSystem = async () => {
             )
         `);
 
-        // Ensure Super Admin exists based on ENV
+        // 4. CRITICAL: Create Native Postgres Roles for RLS
+        // This fixes 'role "authenticated" does not exist'
+        const rolesQuery = `
+            DO $$
+            BEGIN
+              IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'anon') THEN
+                CREATE ROLE anon NOLOGIN;
+                GRANT USAGE ON SCHEMA public TO anon;
+                GRANT SELECT ON ALL TABLES IN SCHEMA public TO anon;
+                ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO anon;
+              END IF;
+
+              IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'authenticated') THEN
+                CREATE ROLE authenticated NOLOGIN;
+                GRANT USAGE ON SCHEMA public TO authenticated;
+                GRANT ALL ON ALL TABLES IN SCHEMA public TO authenticated;
+                GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO authenticated;
+                ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO authenticated;
+                ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO authenticated;
+              END IF;
+              
+              IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'service_role') THEN
+                CREATE ROLE service_role NOLOGIN; 
+                GRANT ALL ON SCHEMA public TO service_role;
+                GRANT ALL ON ALL TABLES IN SCHEMA public TO service_role;
+              END IF;
+            END
+            $$;
+        `;
+        await pool.query(rolesQuery);
+
+        // 5. CRITICAL: Create Auth Helper Functions (Supabase-style)
+        // This allows 'auth.uid() = user_id' to work in policies
+        await pool.query(`
+            CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid AS $$
+            SELECT NULLIF(current_setting('inercia.user_id', true), '')::uuid;
+            $$ LANGUAGE sql STABLE;
+
+            CREATE OR REPLACE FUNCTION auth.role() RETURNS text AS $$
+            SELECT COALESCE(current_setting('inercia.user_role', true), 'anon');
+            $$ LANGUAGE sql STABLE;
+            
+            CREATE OR REPLACE FUNCTION auth.email() RETURNS text AS $$
+            SELECT NULLIF(current_setting('inercia.user_email', true), '')::text;
+            $$ LANGUAGE sql STABLE;
+        `);
+
+        // 6. Super Admin Setup
         const superEmail = process.env.SUPER_ADMIN_EMAIL;
         const superPass = process.env.SUPER_ADMIN_PASSWORD;
-        
         if (superEmail && superPass) {
             const hash = await bcrypt.hash(superPass, 10);
             const userRes = await pool.query(`SELECT * FROM auth.users WHERE email = $1`, [superEmail]);
-            
             if (userRes.rows.length === 0) {
-                console.log(`Creating Super Admin: ${superEmail}`);
                 await pool.query(
                     `INSERT INTO auth.users (email, encrypted_password, role, provider) VALUES ($1, $2, 'admin', 'email')`,
                     [superEmail, hash]
@@ -64,26 +114,21 @@ const setupSystem = async () => {
             }
         }
         
-        // Initialize Dynamic Strategies
         await refreshAuthStrategies();
+        console.log("System Setup Complete: Roles & Functions Ready.");
 
     } catch (e) {
         console.error("System init error", e);
     }
 };
 
-// Function to reload strategies from DB without restarting server
 const refreshAuthStrategies = async () => {
     try {
         const res = await pool.query("SELECT * FROM auth.providers WHERE enabled = true");
         const providers = res.rows;
-        
-        // Unuse existing to avoid duplicates if re-running
         passport.unuse('google');
-
         providers.forEach(p => {
             if (p.id === 'google' && p.client_id && p.client_secret) {
-                console.log("Initializing Google OAuth Strategy from Database Config...");
                 passport.use(new GoogleStrategy({
                     clientID: p.client_id,
                     clientSecret: p.client_secret,
@@ -93,13 +138,9 @@ const refreshAuthStrategies = async () => {
                     try {
                         const email = profile.emails?.[0].value;
                         if (!email) return done(new Error("No email found"));
-
-                        // Upsert User
                         const userRes = await pool.query('SELECT * FROM auth.users WHERE email = $1', [email]);
                         let user = userRes.rows[0];
-
                         if (!user) {
-                            // Default role is user. Admin role comes from ENV override or manual SQL update.
                             const insert = await pool.query(
                                 `INSERT INTO auth.users (email, provider, role) VALUES ($1, 'google', 'user') RETURNING *`, 
                                 [email]
@@ -110,11 +151,8 @@ const refreshAuthStrategies = async () => {
                     } catch (err: any) { return done(err); }
                 }));
             }
-            // Future: Add GitHub, Apple, etc here
         });
-    } catch (e) {
-        console.error("Failed to load auth strategies", e);
-    }
+    } catch (e) { console.error("Failed to load auth strategies", e); }
 };
 
 setupSystem();
@@ -126,12 +164,10 @@ const allowedOrigins = [...new Set(
         .map(o => o.trim().replace(/\/$/, ''))
         .filter(o => o.length > 0)
 )];
-
 if (process.env.FRONTEND_URL) {
     const fe = process.env.FRONTEND_URL.replace(/\/$/, '');
     if (!allowedOrigins.includes(fe)) allowedOrigins.push(fe);
 }
-
 allowedOrigins.push('http://localhost:3000');
 allowedOrigins.push('http://127.0.0.1:3000');
 
@@ -139,7 +175,6 @@ app.use(helmet() as any);
 app.use(cors({
   origin: (origin, callback) => {
     if (!origin) return callback(null, true);
-    // Allow strict list in prod, loose in dev if needed
     callback(null, true); 
   },
   credentials: true,
@@ -189,7 +224,6 @@ const requireAdmin = (req: any, res: any, next: any) => {
 
 // --- ROUTES ---
 
-// CONFIG
 app.get('/api/config', (req, res) => {
     res.json({
         apiExternalUrl: process.env.API_EXTERNAL_URL || 'http://localhost:3000',
@@ -199,7 +233,6 @@ app.get('/api/config', (req, res) => {
     });
 });
 
-// STATS
 app.get('/api/stats', authenticateJWT, async (req, res) => {
     try {
         const dbStats = await pool.query(`
@@ -213,9 +246,7 @@ app.get('/api/stats', authenticateJWT, async (req, res) => {
     } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
 
-// --- AUTHENTICATION ---
-
-// 1. Email/Pass Login
+// AUTH
 app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body;
   const superEmail = process.env.SUPER_ADMIN_EMAIL;
@@ -224,7 +255,6 @@ app.post('/api/auth/login', async (req, res) => {
     if (result.rows.length === 0) return res.status(401).json({ error: "User not found" });
     let user = result.rows[0];
     
-    // For Dashboard access, strict check
     if (user.role !== 'admin' && user.email !== superEmail) {
         return res.status(403).json({ error: "Access Denied: Dashboard is for Admins only." });
     }
@@ -238,7 +268,6 @@ app.post('/api/auth/login', async (req, res) => {
   } catch (e: any) { res.status(500).json({ error: "Internal Error" }); }
 });
 
-// 2. Google OAuth Routes
 app.get('/api/auth/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
 app.get('/api/auth/google/callback', passport.authenticate('google', { session: false }), (req: any, res) => {
     const token = jwt.sign(
@@ -246,11 +275,9 @@ app.get('/api/auth/google/callback', passport.authenticate('google', { session: 
         process.env.JWT_SECRET as string, 
         { expiresIn: TOKEN_EXPIRY_VALUE as any }
     );
-    // Redirect to frontend with token
     res.redirect(`${process.env.FRONTEND_URL || ''}/auth/callback?token=${token}`);
 });
 
-// 3. User Registration (Admin Only or via API)
 app.post('/api/auth/register', authenticateJWT, requireAdmin, async (req, res) => {
   const { email, password, role } = req.body;
   try {
@@ -263,44 +290,26 @@ app.post('/api/auth/register', authenticateJWT, requireAdmin, async (req, res) =
   } catch (e: any) { res.status(500).json({ error: "Registration failed" }); }
 });
 
-// --- PROVIDER MANAGEMENT (Dynamic Auth) ---
+// PROVIDERS
 app.get('/api/auth/providers', authenticateJWT, requireAdmin, async (req, res) => {
-    try {
-        // Return sensitive info masked or full? For admin panel, full is usually needed to edit.
-        const r = await pool.query("SELECT id, client_id, client_secret, enabled, updated_at FROM auth.providers");
-        res.json(r.rows);
-    } catch (e:any) { res.status(500).json({error: e.message}); }
+    try { const r = await pool.query("SELECT id, client_id, client_secret, enabled, updated_at FROM auth.providers"); res.json(r.rows); } catch (e:any) { res.status(500).json({error: e.message}); }
 });
-
 app.post('/api/auth/providers', authenticateJWT, requireAdmin, async (req, res) => {
     const { id, client_id, client_secret, enabled } = req.body;
     try {
-        await pool.query(`
-            INSERT INTO auth.providers (id, client_id, client_secret, enabled, updated_at)
-            VALUES ($1, $2, $3, $4, NOW())
-            ON CONFLICT (id) DO UPDATE 
-            SET client_id = EXCLUDED.client_id, 
-                client_secret = EXCLUDED.client_secret, 
-                enabled = EXCLUDED.enabled,
-                updated_at = NOW()
-        `, [id, client_id, client_secret, enabled]);
-        
-        // Reload strategies immediately
+        await pool.query(`INSERT INTO auth.providers (id, client_id, client_secret, enabled, updated_at) VALUES ($1, $2, $3, $4, NOW()) ON CONFLICT (id) DO UPDATE SET client_id = EXCLUDED.client_id, client_secret = EXCLUDED.client_secret, enabled = EXCLUDED.enabled, updated_at = NOW()`, [id, client_id, client_secret, enabled]);
         await refreshAuthStrategies();
-        
         res.json({ success: true });
     } catch (e:any) { res.status(500).json({error: e.message}); }
 });
 
-
-// --- DATA ROUTES (Tables, RLS, etc) ---
+// CRUD & DATA (With limited RLS Context for now - Full enforcement happens when user connects via SDK)
 app.get('/api/tables', authenticateJWT, async (req, res) => {
   try {
     const result = await pool.query(`SELECT table_schema, table_name FROM information_schema.tables WHERE table_schema NOT IN ('information_schema', 'pg_catalog', 'inercia_sys') ORDER BY table_schema, table_name`);
     res.json(result.rows);
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
-
 app.get('/api/tables/:schema/:table/meta', authenticateJWT, async (req, res) => {
     const { schema, table } = req.params;
     if (!/^[a-zA-Z0-9_]+$/.test(schema) || !/^[a-zA-Z0-9_]+$/.test(table)) return res.status(400).json({ error: "Invalid" });
@@ -309,7 +318,6 @@ app.get('/api/tables/:schema/:table/meta', authenticateJWT, async (req, res) => 
         res.json(result.rows);
     } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
-
 app.get('/api/tables/:schema/:table/data', authenticateJWT, async (req, res) => {
   const { schema, table } = req.params;
   const { limit = 100, offset = 0 } = req.query;
@@ -320,7 +328,6 @@ app.get('/api/tables/:schema/:table/data', authenticateJWT, async (req, res) => 
     res.json({ data: result.rows, pk });
   } catch (e: any) { res.status(500).json({ error: e.message }); }
 });
-
 app.post('/api/tables/:schema/:table/data', authenticateJWT, async (req, res) => {
     const { schema, table } = req.params;
     try {
@@ -331,7 +338,6 @@ app.post('/api/tables/:schema/:table/data', authenticateJWT, async (req, res) =>
         res.json(result.rows[0]);
     } catch (e: any) { res.status(400).json({ error: e.message }); }
 });
-
 app.put('/api/tables/:schema/:table/data/:id', authenticateJWT, async (req, res) => {
     const { schema, table, id } = req.params;
     const pkColumn = req.query.pk as string || 'id';
@@ -343,7 +349,6 @@ app.put('/api/tables/:schema/:table/data/:id', authenticateJWT, async (req, res)
         res.json(result.rows[0]);
     } catch (e: any) { res.status(400).json({ error: e.message }); }
 });
-
 app.delete('/api/tables/:schema/:table/data/:id', authenticateJWT, async (req, res) => {
     const { schema, table, id } = req.params;
     const pkColumn = req.query.pk as string || 'id';
@@ -353,16 +358,11 @@ app.delete('/api/tables/:schema/:table/data/:id', authenticateJWT, async (req, r
     } catch (e: any) { res.status(400).json({ error: e.message }); }
 });
 
-// FILES (Real Save)
-app.get('/api/files', authenticateJWT, async (req, res) => {
-    try { const r = await pool.query(`SELECT id, name, content, schema_name, type FROM inercia_sys.files`); res.json(r.rows); } catch(e:any) { res.status(500).json({error:e.message}); }
-});
+// FILES
+app.get('/api/files', authenticateJWT, async (req, res) => { try { const r = await pool.query(`SELECT id, name, content, schema_name, type FROM inercia_sys.files`); res.json(r.rows); } catch(e:any) { res.status(500).json({error:e.message}); } });
 app.post('/api/files', authenticateJWT, requireAdmin, async (req, res) => {
     const { name, content, schema_name, type } = req.body;
-    try {
-        const r = await pool.query(`INSERT INTO inercia_sys.files (name, content, schema_name, type) VALUES ($1, $2, $3, $4) RETURNING id`, [name, content, schema_name || 'principal', type || 'txt']);
-        res.json({success:true, id: r.rows[0].id});
-    } catch(e:any) { res.status(500).json({error:e.message}); }
+    try { const r = await pool.query(`INSERT INTO inercia_sys.files (name, content, schema_name, type) VALUES ($1, $2, $3, $4) RETURNING id`, [name, content, schema_name || 'principal', type || 'txt']); res.json({success:true, id: r.rows[0].id}); } catch(e:any) { res.status(500).json({error:e.message}); }
 });
 app.put('/api/files/:id', authenticateJWT, requireAdmin, async (req, res) => {
     const { id } = req.params;
@@ -370,27 +370,45 @@ app.put('/api/files/:id', authenticateJWT, requireAdmin, async (req, res) => {
     try { await pool.query(`UPDATE inercia_sys.files SET content = $1, updated_at = NOW() WHERE id = $2`, [content, id]); res.json({success:true}); } catch(e:any) { res.status(500).json({error:e.message}); }
 });
 
-// RLS
+// --- RLS POLICIES (CORRECTED & AGGRESSIVE) ---
 app.get('/api/policies', authenticateJWT, async (req, res) => {
     const r = await pool.query('SELECT * FROM pg_policies'); res.json(r.rows);
 });
+
 app.post('/api/policies', authenticateJWT, requireAdmin, async (req, res) => {
     const { table, role, command, expression, schema } = req.body;
+    
+    // VALIDATE ROLES: Ensure they are mapped correctly
+    const validRoles = ['authenticated', 'anon', 'service_role', 'public'];
+    if (!validRoles.includes(role)) {
+        return res.status(400).json({ error: `Invalid role '${role}'. Must be one of: ${validRoles.join(', ')}` });
+    }
+
     try {
         const policyName = `policy_${table}_${command}_${Date.now()}`;
-        let sql = `ALTER TABLE "${schema}"."${table}" ENABLE ROW LEVEL SECURITY; CREATE POLICY "${policyName}" ON "${schema}"."${table}" FOR ${command} TO ${role}`;
+        
+        // Force RLS on the table first (Aggressive Security)
+        await pool.query(`ALTER TABLE "${schema}"."${table}" ENABLE ROW LEVEL SECURITY`);
+
+        let sql = `CREATE POLICY "${policyName}" ON "${schema}"."${table}" FOR ${command} TO ${role}`;
+        
         if (['SELECT', 'DELETE'].includes(command.toUpperCase())) sql += ` USING (${expression});`;
         else if (command.toUpperCase() === 'INSERT') sql += ` WITH CHECK (${expression});`;
         else sql += ` USING (${expression}) WITH CHECK (${expression});`;
-        await pool.query(sql); res.json({ success: true });
-    } catch(e: any) { res.status(500).json({ error: e.message }); }
+
+        await pool.query(sql);
+        res.json({ success: true });
+    } catch(e: any) { 
+        console.error("Policy Error:", e.message);
+        res.status(500).json({ error: e.message }); 
+    }
 });
+
 app.delete('/api/policies', authenticateJWT, requireAdmin, async (req, res) => {
     try { await pool.query(`DROP POLICY IF EXISTS "${req.body.name}" ON "${req.body.schema}"."${req.body.table}"`); res.json({ success: true }); } catch(e: any) { res.status(500).json({ error: e.message }); }
 });
 
-// CSV Import, Schemas, RPC, SQL, Users, Extensions, Tables Create
-// (Keeping existing standard CRUD endpoints logic condensed for brevity as they remain unchanged)
+// Other endpoints (RPC, SQL, Schemas, etc)
 app.post('/api/import/csv', authenticateJWT, requireAdmin, async (req, res) => {
     const { schema, table, rows, createTable } = req.body;
     if (!rows || rows.length === 0) return res.status(400).json({ error: "Empty CSV" });
@@ -424,7 +442,6 @@ app.post('/api/import/csv', authenticateJWT, requireAdmin, async (req, res) => {
         await client.query('COMMIT'); res.json({ success: true, inserted });
     } catch (e: any) { await client.query('ROLLBACK'); res.status(400).json({ error: e.message }); } finally { client.release(); }
 });
-
 app.get('/api/schemas', authenticateJWT, async (req, res) => { try { const r = await pool.query(`SELECT nspname as name FROM pg_namespace WHERE nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast')`); res.json(r.rows); } catch(e:any) { res.status(500).json({error: e.message}); } });
 app.post('/api/schemas', authenticateJWT, requireAdmin, async (req, res) => { try { await pool.query(`CREATE SCHEMA IF NOT EXISTS "${req.body.name}"`); res.json({ success: true }); } catch(e: any) { res.status(500).json({ error: e.message }); } });
 app.put('/api/schemas/:name', authenticateJWT, requireAdmin, async (req, res) => { try { await pool.query(`ALTER SCHEMA "${req.params.name}" RENAME TO "${req.body.newName}"`); res.json({ success: true }); } catch (e: any) { res.status(500).json({ error: e.message }); } });
