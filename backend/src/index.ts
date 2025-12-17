@@ -15,19 +15,24 @@ const PORT = process.env.PORT || 3000;
 
 // --- DYNAMIC CORS CONFIGURATION ---
 const rawOrigins = process.env.ALLOWED_ORIGINS || '';
-// Split by comma, trim whitespace, and remove trailing slashes/wildcards for exact origin matching
-const allowedOrigins = rawOrigins.split(',').map(origin => {
-    let clean = origin.trim();
-    // Remove trailing slash if present (CORS origins usually don't have paths)
-    if (clean.endsWith('/')) clean = clean.slice(0, -1);
-    // Remove wildcards for safety (basic implementation)
-    if (clean.endsWith('/*')) clean = clean.slice(0, -2);
-    return clean;
-});
+const allowedOrigins: string[] = [];
 
-// Add the FRONTEND_URL to allowed origins automatically
+try {
+    rawOrigins.split(',').forEach(origin => {
+        let clean = origin.trim();
+        if (clean) {
+            if (clean.endsWith('/')) clean = clean.slice(0, -1);
+            if (clean.endsWith('/*')) clean = clean.slice(0, -2);
+            allowedOrigins.push(clean);
+        }
+    });
+} catch (e) {
+    console.error("Error parsing ALLOWED_ORIGINS", e);
+}
+
+// Add FRONTEND_URL automatically
 if (process.env.FRONTEND_URL) {
-    allowedOrigins.push(process.env.FRONTEND_URL);
+    allowedOrigins.push(process.env.FRONTEND_URL.replace(/\/$/, ''));
 }
 
 console.log('CORS Allowed Origins:', allowedOrigins);
@@ -35,14 +40,15 @@ console.log('CORS Allowed Origins:', allowedOrigins);
 app.use(helmet() as any); 
 app.use(cors({
   origin: (origin, callback) => {
-    // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) return callback(null, true);
+    // Loose matching for debugging issues with protocols
+    const isAllowed = allowedOrigins.some(allowed => origin.includes(allowed) || allowed === '*');
     
-    if (allowedOrigins.indexOf(origin) !== -1 || allowedOrigins.includes('*')) {
+    if (isAllowed) {
       callback(null, true);
     } else {
       console.warn(`Blocked CORS request from: ${origin}`);
-      callback(new Error('Not allowed by CORS'));
+      callback(null, false); // Don't throw error, just deny
     }
   },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -58,7 +64,6 @@ interface User {
   role: string;
 }
 
-// --- CONFIG ---
 const JWT_EXPIRY = process.env.JWT_EXPIRY ? String(process.env.JWT_EXPIRY) : '12h';
 
 // --- PASSPORT CONFIG ---
@@ -92,7 +97,6 @@ if (process.env.GOOGLE_CLIENT_ID) {
 
 // --- MIDDLEWARE ---
 const authenticateJWT = (req: any, res: any, next: any) => {
-  // Check for Master Key (Service Role)
   const apiKey = req.headers['apikey'];
   if (apiKey && apiKey === process.env.JWT_SECRET) {
       req.user = { id: 'service_role', role: 'service_role' };
@@ -122,7 +126,6 @@ const requireAdmin = (req: any, res: any, next: any) => {
 
 // --- ROUTES ---
 
-// 1. Auth Routes
 app.post('/api/auth/register', async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) return res.status(400).json({ error: "Email and password required" });
@@ -136,12 +139,14 @@ app.post('/api/auth/register', async (req, res) => {
     res.json(result.rows[0]);
   } catch (e: any) {
     console.error("Register Error:", e);
-    res.status(500).json({ error: "Registration failed. User may already exist." });
+    res.status(500).json({ error: "Registration failed." });
   }
 });
 
 app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body;
+  console.log(`Login attempt for: ${email}`);
+  
   try {
     const result = await pool.query(`SELECT * FROM auth.users WHERE email = $1`, [email]);
     if (result.rows.length === 0) return res.status(401).json({ error: "User not found" });
@@ -149,18 +154,22 @@ app.post('/api/auth/login', async (req, res) => {
     const user = result.rows[0];
     if (!user.encrypted_password) return res.status(401).json({ error: "Please login with Google" });
 
+    // Handle pgcrypto legacy hashes if necessary, otherwise use bcrypt
     const valid = await bcrypt.compare(password, user.encrypted_password);
-    if (!valid) return res.status(401).json({ error: "Invalid password" });
+    if (!valid) {
+        console.warn(`Invalid password for user: ${email}`);
+        return res.status(401).json({ error: "Invalid password" });
+    }
 
     const token = jwt.sign(
         { id: user.id, email: user.email, role: user.role }, 
         process.env.JWT_SECRET as string, 
-        { expiresIn: JWT_EXPIRY as any } // Using configured expiry
+        { expiresIn: JWT_EXPIRY as any } 
     );
     res.json({ token, user: { id: user.id, email: user.email, role: user.role } });
   } catch (e: any) {
-    console.error("Login Error:", e);
-    res.status(500).json({ error: "Internal Server Error" });
+    console.error("Login Critical Error:", e);
+    res.status(500).json({ error: "Internal Server Error: " + e.message });
   }
 });
 
@@ -173,21 +182,19 @@ app.get('/api/auth/google/callback', passport.authenticate('google', { session: 
       process.env.JWT_SECRET as string, 
       { expiresIn: JWT_EXPIRY as any }
   );
-  // Redirect to the configured Frontend URL
   res.redirect(`/#/auth/callback?token=${token}`);
 });
 
-// 2. System Routes
 app.get('/api/health', async (req, res) => {
   try {
     await pool.query('SELECT 1');
-    res.json({ status: 'healthy', db: 'connected', version: '1.3.0' });
+    res.json({ status: 'healthy', db: 'connected', version: '1.4.0' });
   } catch (e) {
     res.status(500).json({ status: 'unhealthy', db: 'disconnected' });
   }
 });
 
-// 3. Studio: Table & Data Management
+// Studio Routes
 app.get('/api/tables', authenticateJWT, async (req, res) => {
   try {
     const result = await pool.query(`
@@ -218,10 +225,8 @@ app.get('/api/tables/:schema/:table/data', authenticateJWT, async (req, res) => 
   }
 });
 
-// No-Code Table Creation
 app.post('/api/tables/create', authenticateJWT, requireAdmin, async (req, res) => {
     const { name, columns } = req.body;
-    
     if (!name || !columns) return res.status(400).json({error: "Invalid schema definition"});
 
     try {
@@ -237,11 +242,11 @@ app.post('/api/tables/create', authenticateJWT, requireAdmin, async (req, res) =
         await pool.query(sql);
         res.json({ success: true, message: `Table ${name} created` });
     } catch (e: any) {
+        console.error(e);
         res.status(500).json({ error: e.message });
     }
 });
 
-// 4. Extensions Manager
 app.get('/api/extensions', authenticateJWT, requireAdmin, async (req, res) => {
     try {
         const installed = await pool.query('SELECT extname FROM pg_extension');
@@ -261,7 +266,8 @@ app.get('/api/extensions', authenticateJWT, requireAdmin, async (req, res) => {
 });
 
 app.post('/api/extensions', authenticateJWT, requireAdmin, async (req, res) => {
-    const { name, action } = req.body; // action: 'install' | 'uninstall'
+    const { name, action } = req.body;
+    console.log(`Extension action: ${action} ${name}`);
     try {
         if (action === 'install') {
             await pool.query(`CREATE EXTENSION IF NOT EXISTS "${name}" CASCADE`);
@@ -270,19 +276,17 @@ app.post('/api/extensions', authenticateJWT, requireAdmin, async (req, res) => {
         }
         res.json({ success: true });
     } catch (e: any) {
+        console.error("Extension Error:", e);
         res.status(500).json({ error: e.message });
     }
 });
 
-// 5. RPC (Remote Procedure Calls) - The "API" Layer
-// List available functions
 app.get('/api/rpc', authenticateJWT, async (req, res) => {
     try {
         const query = `
             SELECT n.nspname as schema, p.proname as name, pg_get_function_arguments(p.oid) as args
             FROM pg_proc p
             JOIN pg_namespace n ON p.pronamespace = n.oid
-            WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
             ORDER BY n.nspname, p.proname;
         `;
         const result = await pool.query(query);
@@ -292,7 +296,6 @@ app.get('/api/rpc', authenticateJWT, async (req, res) => {
     }
 });
 
-// Execute a function
 app.post('/api/rpc/:functionName', authenticateJWT, async (req, res) => {
     const { functionName } = req.params;
     const params = req.body; 
@@ -300,29 +303,28 @@ app.post('/api/rpc/:functionName', authenticateJWT, async (req, res) => {
     try {
         const values = Object.values(params || {});
         const placeholders = values.map((_, i) => `$${i + 1}`).join(',');
-        
         const result = await pool.query(`SELECT * FROM "${functionName}"(${placeholders})`, values);
-        
         res.json(result.rows);
     } catch (e: any) {
+        console.error("RPC Error:", e);
         res.status(400).json({ error: e.message });
     }
 });
 
-// 6. Admin SQL Editor
 app.post('/api/sql', authenticateJWT, requireAdmin, async (req, res) => {
   const { query } = req.body;
+  console.log("Executing SQL:", query);
   if (!query) return res.status(400).json({ error: "Query required" });
   
   try {
     const result = await pool.query(query);
     res.json({ rows: result.rows, rowCount: result.rowCount, command: result.command });
   } catch (e: any) {
+    console.error("SQL Error:", e);
     res.status(400).json({ error: e.message });
   }
 });
 
-// 7. Auth Management
 app.get('/api/users', authenticateJWT, requireAdmin, async (req, res) => {
   try {
     const result = await pool.query('SELECT id, email, role, provider, created_at FROM auth.users ORDER BY created_at DESC LIMIT 100');

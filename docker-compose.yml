@@ -33,6 +33,9 @@ services:
       dockerfile: infrastructure/Dockerfile.node
     container_name: inercia_api
     restart: always
+    # Added ports mapping so 44.193.28.92:3000 works externally
+    ports:
+      - "${PORT}:3000"
     environment:
       PORT: 3000
       DATABASE_URL: postgres://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME}
@@ -75,10 +78,8 @@ services:
     container_name: inercia_studio
     restart: always
     ports:
-      - "${PORT}:80"
+      - "80:80"
     environment:
-      # These variables are used by 20-envsubst-on-templates.sh in the nginx container
-      # to dynamically replace ${DOMAIN_NAME} in nginx.conf
       DOMAIN_NAME: ${DOMAIN_NAME}
       API_DOMAIN_NAME: ${API_DOMAIN_NAME}
     depends_on:

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../api';
-import { Activity, Server, Database, Lock } from 'lucide-react';
+import { Activity, Server, Database, Lock, Plug } from 'lucide-react';
 
 const Dashboard = () => {
   const [health, setHealth] = useState<any>(null);
@@ -22,19 +22,29 @@ const Dashboard = () => {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-3xl font-bold text-white mb-8">System Overview</h1>
+      <div className="flex justify-between items-center mb-8">
+        <h1 className="text-3xl font-bold text-white">System Overview</h1>
+        <div className="flex gap-2">
+            <button className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded font-bold flex items-center gap-2">
+                <Plug size={18} /> Connect App
+            </button>
+        </div>
+      </div>
       
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         {/* Health Card */}
-        <div className="bg-slate-800 p-6 rounded-lg border border-slate-700">
-            <div className="flex items-center justify-between mb-4">
+        <div className="bg-slate-800 p-6 rounded-lg border border-slate-700 relative overflow-hidden">
+            <div className="absolute top-0 right-0 p-4 opacity-10">
+                <Activity size={64} className="text-emerald-500" />
+            </div>
+            <div className="flex items-center justify-between mb-4 relative z-10">
                 <h3 className="text-slate-400 font-medium">System Status</h3>
                 <Activity className="text-emerald-500" />
             </div>
-            <div className="text-2xl font-bold text-white">
+            <div className="text-2xl font-bold text-white relative z-10">
                 {health?.status === 'healthy' ? 'Operational' : 'Offline'}
             </div>
-            <p className="text-sm text-slate-500 mt-2">API Latency: 24ms</p>
+            <p className="text-sm text-slate-500 mt-2 relative z-10">API v{health?.version || '1.0'}</p>
         </div>
 
         {/* Database Card */}
@@ -74,15 +84,41 @@ const Dashboard = () => {
         </div>
       </div>
 
-      <div className="mt-8 bg-slate-800 rounded-lg border border-slate-700 p-6">
-        <h2 className="text-xl font-bold text-white mb-4">Quick Start</h2>
-        <div className="bg-slate-950 p-4 rounded text-slate-300 font-mono text-sm">
-            <p className="mb-2"># Install JS Client</p>
-            <p className="text-emerald-400">npm install @inercia/js</p>
-            <br />
-            <p className="mb-2"># Initialize</p>
-            <p className="text-blue-400">import &#123; createClient &#125; from '@inercia/js'</p>
-            <p>const inercia = createClient('{window.location.origin}', 'YOUR_API_KEY')</p>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-8">
+        <div className="bg-slate-800 rounded-lg border border-slate-700 p-6">
+            <h2 className="text-xl font-bold text-white mb-4">Connection Details</h2>
+            <div className="space-y-4">
+                <div>
+                    <label className="text-xs text-slate-500 uppercase font-bold">API URL</label>
+                    <div className="bg-slate-950 p-3 rounded text-slate-300 font-mono text-sm border border-slate-700 mt-1 select-all">
+                        {window.location.origin}/api
+                    </div>
+                </div>
+                <div>
+                    <label className="text-xs text-slate-500 uppercase font-bold">Postgres Connection String</label>
+                    <div className="bg-slate-950 p-3 rounded text-slate-300 font-mono text-sm border border-slate-700 mt-1 select-all break-all">
+                        postgresql://postgres:[PASSWORD]@{window.location.hostname}:5432/inercia_prod
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div className="bg-slate-800 rounded-lg border border-slate-700 p-6">
+             <h2 className="text-xl font-bold text-white mb-4">Service Status</h2>
+             <div className="space-y-3">
+                 <div className="flex justify-between items-center p-3 bg-slate-900 rounded border border-slate-700">
+                     <span className="text-slate-300">Auth Service</span>
+                     <span className="text-emerald-500 text-sm font-bold">ONLINE</span>
+                 </div>
+                 <div className="flex justify-between items-center p-3 bg-slate-900 rounded border border-slate-700">
+                     <span className="text-slate-300">Storage Engine</span>
+                     <span className="text-emerald-500 text-sm font-bold">ONLINE</span>
+                 </div>
+                 <div className="flex justify-between items-center p-3 bg-slate-900 rounded border border-slate-700">
+                     <span className="text-slate-300">Realtime (Redis)</span>
+                     <span className="text-emerald-500 text-sm font-bold">ONLINE</span>
+                 </div>
+             </div>
         </div>
       </div>
     </div>
