@@ -9,17 +9,19 @@ services:
       POSTGRES_USER: ${DB_USER:-postgres}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-admin123}
       POSTGRES_DB: ${DB_NAME:-inercia_base}
-      TZ: ${GENERIC_TIMEZONE:-UTC}
+      TZ: ${GENERIC_TIMEZONE:-America/Sao_Paulo}
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./backend/init_sql.txt:/docker-entrypoint-initdb.d/init.sql
     networks:
       - inercia_net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-inercia_base}"]
-      interval: 5s
+      # We use 'postgres' as host to ensure pg_isready checks the correct interface
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 20s
 
   api:
     build:
@@ -31,10 +33,10 @@ services:
       - "${PORT:-3000}:3000"
     environment:
       PORT: 3000
-      INSTANCE_MODE: CONTROL_PLANE # Change to DATA_PLANE for individual client APIs
+      INSTANCE_MODE: CONTROL_PLANE
       DATABASE_URL: postgres://${DB_USER:-postgres}:${DB_PASSWORD:-admin123}@postgres:5432/${DB_NAME:-inercia_base}
       JWT_SECRET: ${JWT_SECRET:-secret123}
-      TZ: ${GENERIC_TIMEZONE:-UTC}
+      TZ: ${GENERIC_TIMEZONE:-America/Sao_Paulo}
     depends_on:
       postgres:
         condition: service_healthy
@@ -53,7 +55,8 @@ services:
       DOMAIN_NAME: ${DOMAIN_NAME:-localhost}
       API_DOMAIN_NAME: ${API_DOMAIN_NAME:-api.localhost}
     depends_on:
-      - api
+      api:
+        condition: service_started
     networks:
       - inercia_net
 
