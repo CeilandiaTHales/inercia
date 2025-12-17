@@ -3,116 +3,156 @@ export const translations = {
     sidebar: {
       dashboard: "Painel",
       database: "Banco de Dados",
-      browser: "Navegador",
-      builder: "Criador de Tabela",
+      browser: "Tabelas & Dados",
       extensions: "Extensões",
-      logic: "Lógica & API",
-      sql: "Editor SQL",
-      rpc: "Funções / RPC",
-      auth: "Autenticação",
+      logic: "Lógica (SQL/RPC)",
+      auth: "Autenticação & RLS",
       signout: "Sair"
     },
     dashboard: {
-      title: "Visão Geral",
-      connect: "Conectar App",
-      status: "Status do Sistema",
+      title: "Visão Geral do Sistema",
+      connect: "Conectar Aplicação",
+      status: "Saúde do Sistema",
       operational: "Operacional",
       offline: "Offline",
       db_connected: "Conectado",
-      tables: "Tabelas",
+      tables: "Tabelas Ativas",
       security: "Segurança",
-      conn_details: "Detalhes de Conexão",
-      services: "Status dos Serviços"
+      active_users: "Usuários no Banco",
+      stats: "Estatísticas em Tempo Real",
+      conn_usage: "Conexões Ativas"
     },
     browser: {
       tables: "Tabelas",
-      rows: "linhas",
-      loading: "Carregando dados...",
-      no_data: "Nenhum dado encontrado.",
-      select_table: "Selecione uma tabela para visualizar",
-      add_row: "Adicionar Linha",
+      rows: "registros",
+      loading: "Carregando...",
+      no_data: "Tabela vazia ou inexistente.",
+      select_table: "Selecione uma tabela à esquerda ou crie uma nova.",
+      add_row: "Novo Dado",
       edit: "Editar",
       delete: "Excluir",
       actions: "Ações",
       save: "Salvar",
       cancel: "Cancelar",
-      create: "Criar",
-      confirm_delete: "Tem certeza que deseja excluir esta linha?"
+      create: "Criar Tabela",
+      import: "Importar CSV",
+      confirm_delete: "Confirmar exclusão?",
+      new_table_placeholder: "Nome da Nova Tabela"
     },
-    rpc: {
-      functions: "Funções",
-      execute: "Executar Função",
-      test_params: "Parâmetros de Teste (JSON)",
-      result: "Resultado",
-      usage: "Exemplo de Uso da API",
-      select_func: "Selecione uma função na barra lateral para testar.",
-      create_folder: "Criar Pasta (Schema)",
-      folder_name: "Nome da Pasta (Schema)"
+    logic: {
+      explorer: "Explorador",
+      new_schema: "Nova Pasta (Schema)",
+      new_file: "Novo Arquivo / Função",
+      run: "Executar",
+      results: "Resultados",
+      snippet: "Como usar (API)",
+      empty: "Vazio",
+      principal: "Principal (Geral)"
+    },
+    auth: {
+      users: "Gerenciamento de Usuários",
+      policies: "Políticas de Segurança (RLS)",
+      add_user: "Adicionar Usuário",
+      add_policy: "Criar Regra",
+      policy_desc: "Defina quem pode ver ou editar dados.",
+      rule_read: "Quem pode Ler?",
+      rule_write: "Quem pode Gravar?",
+      expression: "Condição SQL (ex: auth.uid() = user_id)"
     },
     sql: {
       title: "Editor SQL",
-      run: "Rodar Query",
+      success_func: "Ir para Função",
+      run: "Executar",
       results: "Resultados",
-      error: "Erro",
-      success_func: "Função criada com sucesso! Deseja testá-la agora?"
+      error: "Erro"
+    },
+    rpc: {
+      functions: "Funções RPC",
+      create_folder: "Nova Pasta",
+      folder_name: "Nome da Pasta",
+      test_params: "Parâmetros de Teste (JSON)",
+      execute: "Executar RPC",
+      result: "Resultado",
+      usage: "Exemplo de Uso",
+      select_func: "Selecione uma função para testar"
     }
   },
   en: {
     sidebar: {
       dashboard: "Dashboard",
       database: "Database",
-      browser: "Browser",
-      builder: "Table Builder",
+      browser: "Tables & Data",
       extensions: "Extensions",
-      logic: "Logic & API",
-      sql: "SQL Editor",
-      rpc: "RPC / Functions",
+      logic: "Logic (SQL/RPC)",
       auth: "Auth & RLS",
       signout: "Sign Out"
     },
     dashboard: {
       title: "System Overview",
       connect: "Connect App",
-      status: "System Status",
+      status: "System Health",
       operational: "Operational",
       offline: "Offline",
       db_connected: "Connected",
-      tables: "Tables",
+      tables: "Active Tables",
       security: "Security",
-      conn_details: "Connection Details",
-      services: "Service Status"
+      active_users: "Total Users",
+      stats: "Real-time Stats",
+      conn_usage: "Active Connections"
     },
     browser: {
       tables: "Tables",
       rows: "rows",
-      loading: "Loading data...",
-      no_data: "No data found in this table.",
-      select_table: "Select a table to view data",
-      add_row: "Add Row",
+      loading: "Loading...",
+      no_data: "Table is empty.",
+      select_table: "Select a table or create a new one.",
+      add_row: "New Row",
       edit: "Edit",
       delete: "Delete",
       actions: "Actions",
       save: "Save",
       cancel: "Cancel",
-      create: "Create",
-      confirm_delete: "Are you sure you want to delete this row?"
+      create: "Create Table",
+      import: "Import CSV",
+      confirm_delete: "Confirm delete?",
+      new_table_placeholder: "New Table Name"
     },
-    rpc: {
-      functions: "Functions",
-      execute: "Execute Function",
-      test_params: "Test Parameters (JSON)",
-      result: "Result Output",
-      usage: "API Usage Example",
-      select_func: "Select a function from the sidebar to test.",
-      create_folder: "Create Folder (Schema)",
-      folder_name: "Folder Name"
+    logic: {
+      explorer: "Explorer",
+      new_schema: "New Folder (Schema)",
+      new_file: "New Folder / Function",
+      run: "Execute",
+      results: "Results",
+      snippet: "API Usage",
+      empty: "Empty",
+      principal: "Principal (General)"
+    },
+    auth: {
+      users: "User Management",
+      policies: "Security Policies (RLS)",
+      add_user: "Add User",
+      add_policy: "Create Rule",
+      policy_desc: "Define who can see or edit data.",
+      rule_read: "Who can Read?",
+      rule_write: "Who can Write?",
+      expression: "SQL Condition (e.g. auth.uid() = user_id)"
     },
     sql: {
       title: "SQL Editor",
+      success_func: "Go to Function",
       run: "Run Query",
-      results: "Results Output",
-      error: "Error",
-      success_func: "Function created successfully! Do you want to test it now?"
+      results: "Results",
+      error: "Error"
+    },
+    rpc: {
+      functions: "RPC Functions",
+      create_folder: "New Folder",
+      folder_name: "Folder Name",
+      test_params: "Test Params (JSON)",
+      execute: "Execute RPC",
+      result: "Result",
+      usage: "Usage Example",
+      select_func: "Select a function to test"
     }
   }
 };
